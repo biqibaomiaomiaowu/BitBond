@@ -10,6 +10,7 @@ Thumbs.db
 !.env.example
 local.properties
 AI_Git_Commit_Rules.md
+AGENTS.md
 
 # Drafts
 stitch/

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bitbond_primary">#F06A7A</color>
+    <color name="bitbond_primary_dark">#C8465A</color>
+    <color name="bitbond_background">#FFF8FA</color>
+</resources>

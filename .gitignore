@@ -1,0 +1,35 @@
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Local environment
+.env
+.env.*
+!.env.example
+local.properties
+AI_Git_Commit_Rules.md
+
+# Drafts
+stitch/
+stitch*/
+
+# Android
+android/.gradle/
+android/build/
+android/app/build/
+*.apk
+*.aab
+
+# Web
+web/node_modules/
+web/dist/
+web/.vite/
+web/d1-screenshot.png
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*

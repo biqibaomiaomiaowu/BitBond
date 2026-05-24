@@ -16,6 +16,10 @@ AGENTS.md
 stitch/
 stitch*/
 
+# Superpowers
+.codex/
+docs/superpowers/
+
 # Android
 android/.gradle/
 android/build/

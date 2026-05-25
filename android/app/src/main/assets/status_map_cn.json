@@ -1,0 +1,70 @@
+[
+  {
+    "package": "com.ss.android.ugc.aweme",
+    "statusCode": "short_video"
+  },
+  {
+    "package": "com.kuaishou.nebula",
+    "statusCode": "short_video"
+  },
+  {
+    "package": "com.qiyi.video",
+    "statusCode": "watching_show"
+  },
+  {
+    "package": "com.tencent.qqlive",
+    "statusCode": "watching_show"
+  },
+  {
+    "package": "com.youku.phone",
+    "statusCode": "watching_show"
+  },
+  {
+    "package": "tv.danmaku.bili",
+    "statusCode": "watching_show"
+  },
+  {
+    "package": "com.dragon.read",
+    "statusCode": "reading"
+  },
+  {
+    "package": "com.qq.reader",
+    "statusCode": "reading"
+  },
+  {
+    "package": "com.netease.cloudmusic",
+    "statusCode": "music"
+  },
+  {
+    "package": "com.tencent.qqmusic",
+    "statusCode": "music"
+  },
+  {
+    "package": "com.kugou.android",
+    "statusCode": "music"
+  },
+  {
+    "package": "com.tencent.tmgp.sgame",
+    "statusCode": "gaming"
+  },
+  {
+    "package": "com.tencent.tmgp.pubgmhd",
+    "statusCode": "gaming"
+  },
+  {
+    "package": "com.tencent.mm",
+    "statusCode": "social"
+  },
+  {
+    "package": "com.tencent.mobileqq",
+    "statusCode": "social"
+  },
+  {
+    "package": "com.sina.weibo",
+    "statusCode": "social"
+  },
+  {
+    "package": "com.xingin.xhs",
+    "statusCode": "social"
+  }
+]

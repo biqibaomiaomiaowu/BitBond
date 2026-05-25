@@ -1,0 +1,85 @@
+{
+  "version": 1,
+  "generatedAt": "2026-05-25",
+  "source": "imagegen",
+  "review": {
+    "status": "approved_for_homepage_draft",
+    "notes": "子 agent 审查通过，可用于移动端首页动态像素房间初稿；正式版仍可继续统一锚点和像素硬边。"
+  },
+  "room": {
+    "main": "room/room_main.png"
+  },
+  "avatars": {
+    "cat": {
+      "walkDown": {
+        "strip": "avatars/avatar_cat_walk_down_strip.png",
+        "frameWidth": 96,
+        "frameHeight": 96,
+        "frames": [
+          "avatars/avatar_cat_walk_down_01.png",
+          "avatars/avatar_cat_walk_down_02.png",
+          "avatars/avatar_cat_walk_down_03.png",
+          "avatars/avatar_cat_walk_down_04.png"
+        ]
+      },
+      "listenMusic": {
+        "strip": "avatars/avatar_cat_listen_music_strip.png",
+        "frameWidth": 96,
+        "frameHeight": 96,
+        "frames": [
+          "avatars/avatar_cat_listen_music_01.png",
+          "avatars/avatar_cat_listen_music_02.png",
+          "avatars/avatar_cat_listen_music_03.png",
+          "avatars/avatar_cat_listen_music_04.png"
+        ]
+      }
+    }
+  },
+  "statusProps": {
+    "sheet": "status_props/status_props_sheet.png",
+    "frameWidth": 80,
+    "frameHeight": 80,
+    "order": [
+      {
+        "status": "short_video",
+        "file": "status_props/prop_short_video_phone.png"
+      },
+      {
+        "status": "watching_show",
+        "file": "status_props/prop_watching_show_tv.png"
+      },
+      {
+        "status": "reading",
+        "file": "status_props/prop_reading_book.png"
+      },
+      {
+        "status": "music",
+        "file": "status_props/prop_music_headphone.png"
+      },
+      {
+        "status": "gaming",
+        "file": "status_props/prop_gaming_gamepad.png"
+      },
+      {
+        "status": "social",
+        "file": "status_props/prop_social_bubble.png"
+      },
+      {
+        "status": "online",
+        "file": "status_props/prop_online_presence.png"
+      },
+      {
+        "status": "resting",
+        "file": "status_props/prop_resting_moon.png"
+      },
+      {
+        "status": "offline",
+        "file": "status_props/prop_offline_cloud.png"
+      },
+      {
+        "status": "paused",
+        "file": "status_props/prop_paused_badge.png"
+      }
+    ]
+  }
+}

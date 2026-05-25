@@ -9,6 +9,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$previousPgPassword = $env:PGPASSWORD
 
 function Get-DatabaseConnectionParts {
   param(
@@ -16,14 +17,23 @@ function Get-DatabaseConnectionParts {
     [string]$DatabaseUrl
   )
 
-  $uri = [System.Uri]$DatabaseUrl
+  $uri = $null
+  if (-not [System.Uri]::TryCreate($DatabaseUrl, [System.UriKind]::Absolute, [ref]$uri)) {
+    throw "DATABASE_URL is invalid"
+  }
+
   if ($uri.Scheme -notin @("postgres", "postgresql")) {
     throw "DATABASE_URL must use postgres or postgresql scheme"
   }
 
   $userInfoParts = $uri.UserInfo -split ":", 2
-  if ($userInfoParts.Count -lt 2) {
-    throw "DATABASE_URL must include user and password"
+  if ($userInfoParts.Count -lt 1 -or [string]::IsNullOrWhiteSpace($userInfoParts[0])) {
+    throw "DATABASE_URL must include user"
+  }
+
+  $password = $null
+  if ($userInfoParts.Count -ge 2) {
+    $password = [System.Uri]::UnescapeDataString($userInfoParts[1])
   }
 
   $databaseName = [System.Uri]::UnescapeDataString($uri.AbsolutePath.TrimStart("/"))
@@ -40,36 +50,40 @@ function Get-DatabaseConnectionParts {
     Host = $uri.Host
     Port = [string]$port
     User = [System.Uri]::UnescapeDataString($userInfoParts[0])
-    Password = [System.Uri]::UnescapeDataString($userInfoParts[1])
+    Password = $password
     Database = $databaseName
   }
 }
 
-& (Join-Path $PSScriptRoot "load-env.ps1") -Path $EnvPath
-
-if ([string]::IsNullOrWhiteSpace($env:DATABASE_URL)) {
-  throw "DATABASE_URL is required"
-}
-
-$connection = Get-DatabaseConnectionParts -DatabaseUrl $env:DATABASE_URL
-$psqlArgs = @(
-  "-h", $connection.Host,
-  "-p", $connection.Port,
-  "-U", $connection.User,
-  "-d", $connection.Database
-)
-
-if ($PSCmdlet.ParameterSetName -eq "Command") {
-  $psqlArgs += @("-c", $CommandText)
-}
-else {
-  $psqlArgs += @("-f", $FilePath)
-}
-
 $exitCode = 0
-$previousPgPassword = $env:PGPASSWORD
 try {
-  $env:PGPASSWORD = $connection.Password
+  & (Join-Path $PSScriptRoot "load-env.ps1") -Path $EnvPath
+
+  if ([string]::IsNullOrWhiteSpace($env:DATABASE_URL)) {
+    throw "DATABASE_URL is required"
+  }
+
+  $connection = Get-DatabaseConnectionParts -DatabaseUrl $env:DATABASE_URL
+  $psqlArgs = @(
+    "-h", $connection.Host,
+    "-p", $connection.Port,
+    "-U", $connection.User,
+    "-d", $connection.Database
+  )
+
+  if ($PSCmdlet.ParameterSetName -eq "Command") {
+    $psqlArgs += @("-c", $CommandText)
+  }
+  else {
+    $psqlArgs += @("-f", $FilePath)
+  }
+
+  if ($null -eq $connection.Password) {
+    $env:PGPASSWORD = $null
+  }
+  else {
+    $env:PGPASSWORD = $connection.Password
+  }
   & psql @psqlArgs
   $exitCode = if ($null -eq $LASTEXITCODE) { 0 } else { $LASTEXITCODE }
 }

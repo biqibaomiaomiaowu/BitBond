@@ -115,15 +115,15 @@ export function buildInitialState(rawBridgeJson) {
   return {
     bridge: {
       ...fallback.bridge,
-      ...pickObject(parsed.bridge, ['ready', 'message']),
+      ...pickTypedObject(parsed.bridge, { ready: 'boolean', message: 'string' }),
     },
     self: {
       ...fallback.self,
-      ...pickObject(parsed.self, ['sharing', 'statusText']),
+      ...pickTypedObject(parsed.self, { sharing: 'boolean', statusText: 'string' }),
     },
     pair: {
       ...fallback.pair,
-      ...pickObject(parsed.pair, ['paired', 'nickname']),
+      ...pickTypedObject(parsed.pair, { paired: 'boolean', nickname: 'string' }),
     },
     partner: sanitizePartner(parsed.partner, fallback.partner),
     notice: fallback.notice,
@@ -196,13 +196,13 @@ function parseBridgeJson(rawBridgeJson) {
   }
 }
 
-function pickObject(source, keys) {
+function pickTypedObject(source, schema) {
   if (!source || typeof source !== 'object') {
     return {};
   }
 
-  return keys.reduce((picked, key) => {
-    if (key in source) {
+  return Object.entries(schema).reduce((picked, [key, type]) => {
+    if (key in source && typeof source[key] === type) {
       picked[key] = source[key];
     }
     return picked;

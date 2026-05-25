@@ -73,6 +73,24 @@ test('buildInitialState merges valid bridge JSON over the local fallback', () =>
   assert.equal('chatTarget' in state.partner, false);
 });
 
+test('buildInitialState ignores malformed primitive bridge fields and keeps fallbacks', () => {
+  const fallback = createFallbackBridgeState();
+  const state = buildInitialState(
+    JSON.stringify({
+      bridge: { ready: 'false', message: 42 },
+      self: { sharing: 'false', statusText: 12 },
+      pair: { paired: 'false', nickname: false },
+    }),
+  );
+
+  assert.equal(state.bridge.ready, fallback.bridge.ready);
+  assert.equal(state.bridge.message, fallback.bridge.message);
+  assert.equal(state.self.sharing, fallback.self.sharing);
+  assert.equal(state.self.statusText, fallback.self.statusText);
+  assert.equal(state.pair.paired, fallback.pair.paired);
+  assert.equal(state.pair.nickname, fallback.pair.nickname);
+});
+
 test('buildInitialState keeps fallback partner status when Android sends a partial partner', () => {
   const state = buildInitialState(JSON.stringify({ partner: { updatedAt: '刚刚' } }));
 

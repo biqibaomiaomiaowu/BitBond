@@ -27,6 +27,10 @@ public final class ApiResult<T> {
         return value;
     }
 
+    public T data() {
+        return value;
+    }
+
     public ApiError error() {
         return error;
     }

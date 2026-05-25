@@ -18,6 +18,7 @@ stitch*/
 
 # Superpowers
 .codex/
+.agents/
 docs/superpowers/
 
 # Android

@@ -111,6 +111,17 @@ export const statusConfigs = [
   },
 ];
 
+const avatarChoicesSeed = [
+  { id: 'cat', name: '小猫', assetKey: 'avatars/cat' },
+  { id: 'dog', name: '小狗', assetKey: 'avatars/dog' },
+  { id: 'rabbit', name: '小兔', assetKey: 'avatars/rabbit' },
+  { id: 'bear', name: '小熊', assetKey: 'avatars/bear' },
+  { id: 'fox', name: '小狐', assetKey: 'avatars/fox' },
+  { id: 'panda', name: '熊猫', assetKey: 'avatars/panda' },
+  { id: 'penguin', name: '企鹅', assetKey: 'avatars/penguin' },
+  { id: 'duck', name: '小鸭', assetKey: 'avatars/duck' },
+];
+
 export function getStatusConfig(code) {
   return statusConfigs.find((status) => status.code === code) ?? statusConfigs[6];
 }
@@ -423,6 +434,142 @@ export function advanceRoomMotionPhase(roomMotion, motionResult = {}) {
   };
 }
 
+export function buildPermissionViewModel(usageAccess) {
+  const hasUsageAccess = pickObject(usageAccess).hasUsageAccess === true;
+
+  return {
+    hasUsageAccess,
+    title: hasUsageAccess ? '权限已开启' : '需要开启使用情况访问权限',
+    description: hasUsageAccess
+      ? 'BitBond 可以把前台应用映射为抽象状态。'
+      : '开启后只会上传抽象状态类别，不上传具体应用或内容。',
+    actions: [
+      {
+        id: 'check-usage-access',
+        label: '检查权限',
+        bridgeMethod: 'checkUsageAccess',
+        kind: 'secondary',
+      },
+      ...(
+        hasUsageAccess
+          ? []
+          : [
+              {
+                id: 'open-usage-access-settings',
+                label: '打开系统设置',
+                bridgeMethod: 'openUsageAccessSettings',
+                kind: 'primary',
+              },
+            ]
+      ),
+    ],
+  };
+}
+
+export function buildPairingViewModel(state) {
+  const pair = pickObject(state?.pair);
+  const isPaired = pair.paired === true;
+  const partnerName = isPaired ? pair.nickname || '对方' : '未配对';
+
+  return {
+    isPaired,
+    partnerName,
+    inviteCode: typeof pair.inviteCode === 'string' ? pair.inviteCode : '',
+    expiresAt: typeof pair.expiresAt === 'string' ? pair.expiresAt : '',
+    actions: isPaired
+      ? [
+          {
+            id: 'refresh-partner-status',
+            label: '刷新伴侣状态',
+            bridgeMethod: 'refreshPartnerStatus',
+            kind: 'primary',
+          },
+        ]
+      : [
+          {
+            id: 'create-pair-invite',
+            label: '生成配对码',
+            bridgeMethod: 'createPairInvite',
+            kind: 'primary',
+          },
+          {
+            id: 'accept-pair-invite',
+            label: '接受配对码',
+            bridgeMethod: 'acceptPairInvite',
+            kind: 'secondary',
+          },
+        ],
+  };
+}
+
+export function buildAvatarViewModel(options = {}) {
+  const source = pickObject(options);
+  const selectedAvatar = normalizeAvatarId(source.selectedAvatar ?? source.avatarId ?? source.self?.selectedAvatar);
+  const avatarChoices = sanitizeAvatarChoices(source.avatars);
+
+  return {
+    selectedAvatar,
+    avatarChoices: avatarChoices.map((avatar) => ({
+      ...avatar,
+      selected: avatar.id === selectedAvatar,
+    })),
+    actions: [
+      {
+        id: 'list-avatars',
+        label: '刷新头像',
+        bridgeMethod: 'listAvatars',
+        kind: 'secondary',
+      },
+      {
+        id: 'select-avatar',
+        label: '选择头像',
+        bridgeMethod: 'selectAvatar',
+        kind: 'primary',
+      },
+    ],
+  };
+}
+
+export function buildSettingsViewModel(state) {
+  const pair = pickObject(state?.pair);
+  const paired = pair.paired === true;
+
+  return {
+    paired,
+    partnerName: paired ? pair.nickname || '对方' : '未配对',
+    actions: paired
+      ? [
+          {
+            id: 'unlink',
+            label: '解除配对',
+            bridgeMethod: 'unlink',
+            kind: 'danger',
+          },
+        ]
+      : [],
+  };
+}
+
+export function buildDebugViewModel(debugForeground) {
+  const source = pickObject(debugForeground?.debugForeground ?? debugForeground?.data ?? debugForeground);
+  const enabled = source.enabled === true;
+
+  return {
+    enabled,
+    title: enabled ? '调试信息已开启' : '调试信息不可用',
+    description: enabled ? '当前构建允许读取前台调试字段。' : '非调试构建会隐藏包名和应用字段。',
+    packageFields: enabled ? buildDebugPackageFields(source) : [],
+    actions: [
+      {
+        id: 'get-debug-foreground-app',
+        label: '读取前台调试',
+        bridgeMethod: 'getDebugForegroundApp',
+        kind: 'secondary',
+      },
+    ],
+  };
+}
+
 function sanitizePartner(partner, fallbackPartner) {
   if (!partner || typeof partner !== 'object') {
     return fallbackPartner;
@@ -439,6 +586,32 @@ function sanitizePartner(partner, fallbackPartner) {
   };
 
   return safePartner;
+}
+
+function sanitizeAvatarChoices(avatars) {
+  const source = Array.isArray(avatars) && avatars.length > 0 ? avatars : avatarChoicesSeed;
+  const safeChoices = source
+    .map((avatar) => pickObject(avatar))
+    .map((avatar) => ({
+      id: normalizeAvatarId(avatar.id),
+      name: typeof avatar.name === 'string' ? avatar.name : '',
+      assetKey: typeof avatar.assetKey === 'string' ? avatar.assetKey : '',
+    }))
+    .filter((avatar) => avatar.id && avatar.name && avatar.assetKey);
+
+  return safeChoices.length > 0 ? safeChoices : avatarChoicesSeed;
+}
+
+function normalizeAvatarId(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function buildDebugPackageFields(source) {
+  return [
+    { key: 'code', label: '状态码', value: source.code },
+    { key: 'packageName', label: '包名', value: source.packageName },
+    { key: 'appName', label: '应用名', value: source.appName },
+  ].filter((field) => typeof field.value === 'string' && field.value.trim());
 }
 
 function pickDataObject(parsed) {

@@ -8,7 +8,12 @@ import {
   applyPairInviteResult,
   applyPartnerStatusResult,
   applyUnlinkResult,
+  buildAvatarViewModel,
+  buildDebugViewModel,
   buildInitialState,
+  buildPairingViewModel,
+  buildPermissionViewModel,
+  buildSettingsViewModel,
   createFallbackBridgeState,
   getRoomPresentation,
   statusConfigs,
@@ -428,6 +433,95 @@ test('applyUnlinkResult keeps paired state when bridge rejects or returns malfor
   assert.deepEqual(malformed.pair, initial.pair);
   assert.equal(malformed.partner.statusCode, 'reading');
   assert.equal(malformed.notice.kind, 'error');
+});
+
+test('permission view model shows settings action when usage access is false', () => {
+  const viewModel = buildPermissionViewModel({ hasUsageAccess: false });
+
+  assert.equal(viewModel.hasUsageAccess, false);
+  assert.deepEqual(
+    viewModel.actions.map((action) => action.bridgeMethod),
+    ['checkUsageAccess', 'openUsageAccessSettings'],
+  );
+});
+
+test('pairing view model exposes create and accept actions when unpaired', () => {
+  const state = {
+    ...createFallbackBridgeState(),
+    pair: {
+      paired: false,
+      nickname: '',
+      inviteCode: '',
+    },
+  };
+  const viewModel = buildPairingViewModel(state);
+
+  assert.equal(viewModel.isPaired, false);
+  assert.deepEqual(
+    viewModel.actions.map((action) => action.bridgeMethod),
+    ['createPairInvite', 'acceptPairInvite'],
+  );
+});
+
+test('avatar view model exposes 8 avatar choices', () => {
+  const viewModel = buildAvatarViewModel({ selectedAvatar: 'cat' });
+
+  assert.equal(viewModel.avatarChoices.length, 8);
+  assert.deepEqual(
+    viewModel.avatarChoices.map((avatar) => avatar.id),
+    ['cat', 'dog', 'rabbit', 'bear', 'fox', 'panda', 'penguin', 'duck'],
+  );
+  assert.deepEqual(
+    viewModel.avatarChoices.map((avatar) => avatar.name),
+    ['小猫', '小狗', '小兔', '小熊', '小狐', '熊猫', '企鹅', '小鸭'],
+  );
+  assert.deepEqual(
+    viewModel.avatarChoices.map((avatar) => avatar.assetKey),
+    [
+      'avatars/cat',
+      'avatars/dog',
+      'avatars/rabbit',
+      'avatars/bear',
+      'avatars/fox',
+      'avatars/panda',
+      'avatars/penguin',
+      'avatars/duck',
+    ],
+  );
+});
+
+test('settings view model exposes unlink action and does not expose pause/resume action', () => {
+  const viewModel = buildSettingsViewModel({
+    ...createFallbackBridgeState(),
+    pair: {
+      paired: true,
+      nickname: '小禾',
+    },
+  });
+
+  const bridgeMethods = viewModel.actions.map((action) => action.bridgeMethod);
+
+  assert.ok(bridgeMethods.includes('unlink'));
+  assert.equal(bridgeMethods.includes('pauseSharing'), false);
+  assert.equal(bridgeMethods.includes('resumeSharing'), false);
+});
+
+test('debug view model hides package fields when disabled', () => {
+  const viewModel = buildDebugViewModel({
+    enabled: false,
+    packageName: 'com.example.private',
+    appName: 'PrivateApp',
+  });
+
+  assert.equal(viewModel.enabled, false);
+  assert.equal('packageName' in viewModel, false);
+  assert.equal('appName' in viewModel, false);
+  assert.equal('usageDuration' in viewModel, false);
+  assert.deepEqual(viewModel.packageFields, []);
+  assert.deepEqual(
+    viewModel.actions.map((action) => action.bridgeMethod),
+    ['getDebugForegroundApp'],
+  );
 });
 
 function assertPrivateFieldsAbsent(value) {

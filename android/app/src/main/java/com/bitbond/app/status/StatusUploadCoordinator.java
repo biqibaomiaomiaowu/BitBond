@@ -19,7 +19,7 @@ public final class StatusUploadCoordinator implements StatusUploadTrigger {
     private final StatusUploader statusUploader;
     private final Supplier<Instant> clock;
 
-    private String lastUploadedStatusCode;
+    private String lastUploadedForegroundKey;
     private Instant lastUploadedAt;
 
     public StatusUploadCoordinator(
@@ -46,8 +46,9 @@ public final class StatusUploadCoordinator implements StatusUploadTrigger {
         Instant detectedAt = Objects.requireNonNull(clock.get(), "clock instant");
         String packageName = foregroundAppReader.readMostRecentForegroundPackage(FOREGROUND_LOOKBACK_MILLIS);
         String statusCode = statusMapper.mapPackageName(packageName);
+        String foregroundKey = foregroundKey(packageName, statusCode);
 
-        if (isDuplicateWithinWindow(statusCode, detectedAt)) {
+        if (isDuplicateWithinWindow(foregroundKey, detectedAt)) {
             return ApiResult.success("deduplicated");
         }
 
@@ -56,16 +57,24 @@ public final class StatusUploadCoordinator implements StatusUploadTrigger {
             return ApiResult.error(result.error());
         }
 
-        lastUploadedStatusCode = statusCode;
+        lastUploadedForegroundKey = foregroundKey;
         lastUploadedAt = detectedAt;
         return ApiResult.success(statusCode);
     }
 
-    private boolean isDuplicateWithinWindow(String statusCode, Instant detectedAt) {
-        if (!statusCode.equals(lastUploadedStatusCode) || lastUploadedAt == null) {
+    private boolean isDuplicateWithinWindow(String foregroundKey, Instant detectedAt) {
+        if (!foregroundKey.equals(lastUploadedForegroundKey) || lastUploadedAt == null) {
             return false;
         }
 
         return Duration.between(lastUploadedAt, detectedAt).compareTo(DEDUPLICATION_WINDOW) < 0;
+    }
+
+    private static String foregroundKey(String packageName, String statusCode) {
+        if (packageName == null || packageName.trim().isEmpty()) {
+            return statusCode;
+        }
+
+        return packageName.trim();
     }
 }

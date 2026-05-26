@@ -89,6 +89,33 @@ public class StatusUploadCoordinatorTest {
     }
 
     @Test
+    public void uploadsImmediatelyWhenForegroundPackageChangesEvenWithSameStatus() {
+        MutableClock clock = new MutableClock("2026-05-25T12:00:00Z");
+        FakeForegroundReader foregroundReader = new FakeForegroundReader("com.tencent.mm");
+        FakeStatusUploader uploader = new FakeStatusUploader();
+        StatusUploadCoordinator coordinator = new StatusUploadCoordinator(
+                new FakeUsageAccessService(true),
+                foregroundReader,
+                StatusMapper.fromJson("""
+                        [
+                          {"package":"com.tencent.mm","statusCode":"social"},
+                          {"package":"com.sina.weibo","statusCode":"social"}
+                        ]
+                        """),
+                uploader,
+                clock);
+
+        assertTrue(coordinator.uploadDetectedStatus(session()).isSuccess());
+        foregroundReader.setPackageName("com.sina.weibo");
+        clock.set("2026-05-25T12:01:00Z");
+        assertTrue(coordinator.uploadDetectedStatus(session()).isSuccess());
+
+        assertEquals(2, uploader.callCount());
+        assertEquals("social", uploader.lastStatusCode());
+        assertEquals(Instant.parse("2026-05-25T12:01:00Z"), uploader.lastStatusUpdatedAt());
+    }
+
+    @Test
     public void uploadsSameStatusAfterFifteenMinutes() {
         MutableClock clock = new MutableClock("2026-05-25T12:00:00Z");
         FakeStatusUploader uploader = new FakeStatusUploader();

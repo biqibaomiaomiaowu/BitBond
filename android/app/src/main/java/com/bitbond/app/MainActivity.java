@@ -6,6 +6,8 @@ import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.view.ViewGroup;
 import android.webkit.WebSettings;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
@@ -87,7 +89,7 @@ public class MainActivity extends Activity {
         configureWebView(webView, bridgeController);
         setContentView(webView);
 
-        webView.loadUrl("file:///android_asset/index.html");
+        webView.loadUrl(initialWebUrl());
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -100,8 +102,48 @@ public class MainActivity extends Activity {
         settings.setAllowFileAccessFromFileURLs(false);
         settings.setAllowUniversalAccessFromFileURLs(false);
 
-        targetWebView.setWebViewClient(new WebViewClient());
+        targetWebView.setWebViewClient(new WebViewClient() {
+            @Override
+            public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                return assetResponseForUrl(request.getUrl().toString());
+            }
+
+            @Override
+            public WebResourceResponse shouldInterceptRequest(WebView view, String url) {
+                return assetResponseForUrl(url);
+            }
+        });
         targetWebView.addJavascriptInterface(bridgeController, "BitBondBridge");
+    }
+
+    public static String initialWebUrl() {
+        return BitBondWebAssets.INDEX_URL;
+    }
+
+    private WebResourceResponse assetResponseForUrl(String url) {
+        String assetPath = BitBondWebAssets.assetPathForUrl(url);
+        if (assetPath == null) {
+            return null;
+        }
+
+        try {
+            String mimeType = BitBondWebAssets.mimeTypeForAssetPath(assetPath);
+            return new WebResourceResponse(
+                    mimeType,
+                    responseEncoding(mimeType),
+                    getAssets().open(assetPath));
+        } catch (IOException exception) {
+            return null;
+        }
+    }
+
+    private static String responseEncoding(String mimeType) {
+        if (mimeType.startsWith("text/")
+                || "application/javascript".equals(mimeType)
+                || "application/json".equals(mimeType)) {
+            return StandardCharsets.UTF_8.name();
+        }
+        return null;
     }
 
     private void configureWebViewDebugging() {

@@ -25,6 +25,7 @@ docs/superpowers/
 android/.gradle/
 android/build/
 android/app/build/
+android/gradle/gradle-daemon-jvm.properties
 *.apk
 *.aab
 

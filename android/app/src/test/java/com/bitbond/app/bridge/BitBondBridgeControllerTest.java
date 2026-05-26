@@ -20,6 +20,8 @@ import com.bitbond.app.status.DebugForegroundGateway;
 import com.bitbond.app.status.StatusGateway;
 import com.bitbond.app.status.StatusModels.PartnerStatus;
 import com.bitbond.app.status.StatusUploadTrigger;
+import com.bitbond.app.status.AccessibilityAccessGateway;
+import com.bitbond.app.status.BatteryOptimizationGateway;
 import com.bitbond.app.status.UsageAccessGateway;
 
 import java.time.Instant;
@@ -129,6 +131,54 @@ public class BitBondBridgeControllerTest {
         assertTrue(response.getJSONObject("data").getBoolean("opened"));
         assertEquals(1, fixtures.usageAccess.openCallCount);
         assertEquals(Arrays.asList("auth", "openUsageAccessSettings"), fixtures.calls);
+    }
+
+    @Test
+    public void checkAccessibilityAccessAuthenticatesAndReturnsBoolean() throws Exception {
+        Fixtures fixtures = new Fixtures();
+        fixtures.accessibilityAccess.hasAccessibilityAccess = true;
+
+        JSONObject response = json(fixtures.controller().checkAccessibilityAccess());
+
+        assertOk(response);
+        assertTrue(response.getJSONObject("data").getBoolean("hasAccessibilityAccess"));
+        assertEquals(Arrays.asList("auth", "hasAccessibilityAccess"), fixtures.calls);
+    }
+
+    @Test
+    public void openAccessibilitySettingsAuthenticatesAndOpensSettings() throws Exception {
+        Fixtures fixtures = new Fixtures();
+
+        JSONObject response = json(fixtures.controller().openAccessibilitySettings());
+
+        assertOk(response);
+        assertTrue(response.getJSONObject("data").getBoolean("opened"));
+        assertEquals(1, fixtures.accessibilityAccess.openCallCount);
+        assertEquals(Arrays.asList("auth", "openAccessibilitySettings"), fixtures.calls);
+    }
+
+    @Test
+    public void checkBatteryOptimizationAuthenticatesAndReturnsBoolean() throws Exception {
+        Fixtures fixtures = new Fixtures();
+        fixtures.batteryOptimization.ignoringBatteryOptimizations = true;
+
+        JSONObject response = json(fixtures.controller().checkBatteryOptimization());
+
+        assertOk(response);
+        assertTrue(response.getJSONObject("data").getBoolean("isIgnoringBatteryOptimizations"));
+        assertEquals(Arrays.asList("auth", "isIgnoringBatteryOptimizations"), fixtures.calls);
+    }
+
+    @Test
+    public void openBatteryOptimizationSettingsAuthenticatesAndOpensSettings() throws Exception {
+        Fixtures fixtures = new Fixtures();
+
+        JSONObject response = json(fixtures.controller().openBatteryOptimizationSettings());
+
+        assertOk(response);
+        assertTrue(response.getJSONObject("data").getBoolean("opened"));
+        assertEquals(1, fixtures.batteryOptimization.openCallCount);
+        assertEquals(Arrays.asList("auth", "openBatteryOptimizationSettings"), fixtures.calls);
     }
 
     @Test
@@ -319,6 +369,13 @@ public class BitBondBridgeControllerTest {
     }
 
     @Test
+    public void notificationPermissionRequestIsOnlyNeededOnAndroidThirteenAndAboveWhenDenied() {
+        assertFalse(MainActivity.shouldRequestPostNotificationsPermission(32, false));
+        assertTrue(MainActivity.shouldRequestPostNotificationsPermission(33, false));
+        assertFalse(MainActivity.shouldRequestPostNotificationsPermission(33, true));
+    }
+
+    @Test
     public void onResumeStatusSyncSchedulesNetworkWorkOnExecutor() {
         List<String> calls = new ArrayList<>();
         FakeAuthGateway auth = new FakeAuthGateway(calls);
@@ -421,6 +478,8 @@ public class BitBondBridgeControllerTest {
         private final FakeStatusGateway status = new FakeStatusGateway(calls);
         private final FakeStatusUploadTrigger uploadTrigger = new FakeStatusUploadTrigger(calls);
         private final FakeUsageAccessGateway usageAccess = new FakeUsageAccessGateway(calls);
+        private final FakeAccessibilityAccessGateway accessibilityAccess = new FakeAccessibilityAccessGateway(calls);
+        private final FakeBatteryOptimizationGateway batteryOptimization = new FakeBatteryOptimizationGateway(calls);
         private final FakeDebugForegroundGateway debugForeground = new FakeDebugForegroundGateway(calls);
 
         private BitBondBridgeController controller() {
@@ -431,6 +490,8 @@ public class BitBondBridgeControllerTest {
                     status,
                     uploadTrigger,
                     usageAccess,
+                    accessibilityAccess,
+                    batteryOptimization,
                     debugForeground);
         }
     }
@@ -567,6 +628,50 @@ public class BitBondBridgeControllerTest {
         @Override
         public void openUsageAccessSettings() {
             calls.add("openUsageAccessSettings");
+            openCallCount++;
+        }
+    }
+
+    private static final class FakeAccessibilityAccessGateway implements AccessibilityAccessGateway {
+        private final List<String> calls;
+        private boolean hasAccessibilityAccess;
+        private int openCallCount;
+
+        private FakeAccessibilityAccessGateway(List<String> calls) {
+            this.calls = calls;
+        }
+
+        @Override
+        public boolean hasAccessibilityAccess() {
+            calls.add("hasAccessibilityAccess");
+            return hasAccessibilityAccess;
+        }
+
+        @Override
+        public void openAccessibilitySettings() {
+            calls.add("openAccessibilitySettings");
+            openCallCount++;
+        }
+    }
+
+    private static final class FakeBatteryOptimizationGateway implements BatteryOptimizationGateway {
+        private final List<String> calls;
+        private boolean ignoringBatteryOptimizations;
+        private int openCallCount;
+
+        private FakeBatteryOptimizationGateway(List<String> calls) {
+            this.calls = calls;
+        }
+
+        @Override
+        public boolean isIgnoringBatteryOptimizations() {
+            calls.add("isIgnoringBatteryOptimizations");
+            return ignoringBatteryOptimizations;
+        }
+
+        @Override
+        public void openBatteryOptimizationSettings() {
+            calls.add("openBatteryOptimizationSettings");
             openCallCount++;
         }
     }

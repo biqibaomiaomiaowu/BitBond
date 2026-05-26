@@ -16,6 +16,8 @@ import com.bitbond.app.status.DebugForegroundGateway;
 import com.bitbond.app.status.StatusGateway;
 import com.bitbond.app.status.StatusModels.PartnerStatus;
 import com.bitbond.app.status.StatusUploadTrigger;
+import com.bitbond.app.status.AccessibilityAccessGateway;
+import com.bitbond.app.status.BatteryOptimizationGateway;
 import com.bitbond.app.status.UsageAccessGateway;
 
 import java.util.List;
@@ -32,6 +34,8 @@ public final class BitBondBridgeController {
     private final StatusGateway status;
     private final StatusUploadTrigger uploadTrigger;
     private final UsageAccessGateway usageAccess;
+    private final AccessibilityAccessGateway accessibilityAccess;
+    private final BatteryOptimizationGateway batteryOptimization;
     private final DebugForegroundGateway debugForeground;
 
     public BitBondBridgeController(
@@ -41,6 +45,8 @@ public final class BitBondBridgeController {
             StatusGateway status,
             StatusUploadTrigger uploadTrigger,
             UsageAccessGateway usageAccess,
+            AccessibilityAccessGateway accessibilityAccess,
+            BatteryOptimizationGateway batteryOptimization,
             DebugForegroundGateway debugForeground
     ) {
         this.auth = Objects.requireNonNull(auth, "auth");
@@ -49,6 +55,8 @@ public final class BitBondBridgeController {
         this.status = Objects.requireNonNull(status, "status");
         this.uploadTrigger = Objects.requireNonNull(uploadTrigger, "uploadTrigger");
         this.usageAccess = Objects.requireNonNull(usageAccess, "usageAccess");
+        this.accessibilityAccess = Objects.requireNonNull(accessibilityAccess, "accessibilityAccess");
+        this.batteryOptimization = Objects.requireNonNull(batteryOptimization, "batteryOptimization");
         this.debugForeground = Objects.requireNonNull(debugForeground, "debugForeground");
     }
 
@@ -87,6 +95,34 @@ public final class BitBondBridgeController {
     public String openUsageAccessSettings() {
         return authenticated(session -> {
             usageAccess.openUsageAccessSettings();
+            return BridgeResponse.success(new JSONObject().put("opened", true));
+        });
+    }
+
+    @JavascriptInterface
+    public String checkAccessibilityAccess() {
+        return authenticated(session -> BridgeResponse.success(new JSONObject()
+                .put("hasAccessibilityAccess", accessibilityAccess.hasAccessibilityAccess())));
+    }
+
+    @JavascriptInterface
+    public String openAccessibilitySettings() {
+        return authenticated(session -> {
+            accessibilityAccess.openAccessibilitySettings();
+            return BridgeResponse.success(new JSONObject().put("opened", true));
+        });
+    }
+
+    @JavascriptInterface
+    public String checkBatteryOptimization() {
+        return authenticated(session -> BridgeResponse.success(new JSONObject()
+                .put("isIgnoringBatteryOptimizations", batteryOptimization.isIgnoringBatteryOptimizations())));
+    }
+
+    @JavascriptInterface
+    public String openBatteryOptimizationSettings() {
+        return authenticated(session -> {
+            batteryOptimization.openBatteryOptimizationSettings();
             return BridgeResponse.success(new JSONObject().put("opened", true));
         });
     }

@@ -2,7 +2,11 @@ package com.bitbond.app;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.Manifest;
+import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.view.ViewGroup;
 import android.webkit.WebSettings;
@@ -32,9 +36,14 @@ import com.bitbond.app.pairing.PairingRepository;
 import com.bitbond.app.status.DebugForegroundGateway;
 import com.bitbond.app.status.DebugForegroundService;
 import com.bitbond.app.status.ForegroundAppReader;
+import com.bitbond.app.status.AccessibilityAccessGateway;
+import com.bitbond.app.status.AccessibilityAccessHelper;
+import com.bitbond.app.status.BatteryOptimizationGateway;
+import com.bitbond.app.status.BatteryOptimizationHelper;
 import com.bitbond.app.status.StatusGateway;
 import com.bitbond.app.status.StatusMapper;
 import com.bitbond.app.status.StatusModels.PartnerStatus;
+import com.bitbond.app.status.StatusMonitorService;
 import com.bitbond.app.status.StatusRepository;
 import com.bitbond.app.status.StatusUploadCoordinator;
 import com.bitbond.app.status.StatusUploadTrigger;
@@ -61,7 +70,8 @@ import org.json.JSONObject;
 
 public class MainActivity extends Activity {
     private static final int NETWORK_TIMEOUT_MS = 10000;
-    private static final String AUTH_PREFS_NAME = "bitbond_auth";
+    private static final int POST_NOTIFICATIONS_REQUEST_CODE = 2401;
+    public static final String AUTH_PREFS_NAME = "bitbond_auth";
     private static final String AUTH_PREF_ACCESS_TOKEN = "access_token";
     private static final String AUTH_PREF_REFRESH_TOKEN = "refresh_token";
     private static final String AUTH_PREF_EXPIRES_AT = "expires_at";
@@ -71,6 +81,8 @@ public class MainActivity extends Activity {
     private AuthGateway authGateway;
     private StatusUploadTrigger statusUploadTrigger;
     private UsageAccessGateway usageAccessGateway;
+    private AccessibilityAccessGateway accessibilityAccessGateway;
+    private BatteryOptimizationGateway batteryOptimizationGateway;
     private boolean supabaseConfigured;
     private final ExecutorService statusSyncExecutor = Executors.newSingleThreadExecutor();
 
@@ -154,9 +166,25 @@ public class MainActivity extends Activity {
         return buildDebug;
     }
 
+    public static boolean shouldRequestPostNotificationsPermission(int sdkInt, boolean permissionGranted) {
+        return sdkInt >= 33 && !permissionGranted;
+    }
+
+    private void ensureNotificationPermissionForMonitor() {
+        if (shouldRequestPostNotificationsPermission(
+                Build.VERSION.SDK_INT,
+                checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED)) {
+            requestPermissions(
+                    new String[]{Manifest.permission.POST_NOTIFICATIONS},
+                    POST_NOTIFICATIONS_REQUEST_CODE);
+        }
+    }
+
     private BitBondBridgeController createBridgeController() {
         SupabaseConfig.Values config = SupabaseConfig.current();
         usageAccessGateway = new UsageAccessHelper(this);
+        accessibilityAccessGateway = new AccessibilityAccessHelper(this);
+        batteryOptimizationGateway = new BatteryOptimizationHelper(this);
         ForegroundAppReader foregroundAppReader = ForegroundAppReader.fromContext(this);
         DebugForegroundGateway debugForeground = new DebugForegroundService(BuildConfig.DEBUG, foregroundAppReader);
         supabaseConfigured = config.isConfigured();
@@ -171,6 +199,8 @@ public class MainActivity extends Activity {
                     new FailingStatusGateway(),
                     new FailingStatusUploadTrigger(),
                     usageAccessGateway,
+                    accessibilityAccessGateway,
+                    batteryOptimizationGateway,
                     debugForeground);
         }
 
@@ -207,6 +237,8 @@ public class MainActivity extends Activity {
                     statusRepository,
                     statusUploadTrigger,
                     usageAccessGateway,
+                    accessibilityAccessGateway,
+                    batteryOptimizationGateway,
                     debugForeground);
         } catch (RuntimeException exception) {
             authGateway = new FailingAuthGateway("bridge_not_configured", "Bridge could not be configured");
@@ -218,6 +250,8 @@ public class MainActivity extends Activity {
                     new FailingStatusGateway(),
                     new FailingStatusUploadTrigger(),
                     usageAccessGateway,
+                    accessibilityAccessGateway,
+                    batteryOptimizationGateway,
                     debugForeground);
         }
     }
@@ -246,6 +280,8 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
 
+        ensureNotificationPermissionForMonitor();
+        startStatusMonitorService();
         syncStatusOnResume(
                 supabaseConfigured,
                 authGateway,
@@ -283,6 +319,19 @@ public class MainActivity extends Activity {
             });
         } catch (RuntimeException exception) {
             // Best-effort foreground sync must never take down the UI.
+        }
+    }
+
+    private void startStatusMonitorService() {
+        try {
+            Intent intent = new Intent(this, StatusMonitorService.class);
+            if (Build.VERSION.SDK_INT >= 26) {
+                startForegroundService(intent);
+            } else {
+                startService(intent);
+            }
+        } catch (RuntimeException exception) {
+            // Monitor startup is best-effort; manual status upload must remain usable.
         }
     }
 
@@ -329,11 +378,19 @@ public class MainActivity extends Activity {
         super.onDestroy();
     }
 
+    public static AuthGateway failingAuthGateway(String code, String message) {
+        return new FailingAuthGateway(code, message);
+    }
+
+    public static StatusUploadTrigger failingStatusUploadTrigger() {
+        return new FailingStatusUploadTrigger();
+    }
+
     private static ApiError unavailableError() {
         return new ApiError("bridge_unavailable", "Bridge is unavailable");
     }
 
-    private static final class UrlConnectionTransport implements Transport {
+    public static final class UrlConnectionTransport implements Transport {
         @Override
         public TransportResponse post(String url, Map<String, String> headers, String body) throws IOException {
             HttpURLConnection connection = null;
@@ -450,10 +507,10 @@ public class MainActivity extends Activity {
         }
     }
 
-    private static final class SharedPreferencesSessionPersistence implements SessionPersistence {
+    public static final class SharedPreferencesSessionPersistence implements SessionPersistence {
         private final SharedPreferences preferences;
 
-        private SharedPreferencesSessionPersistence(SharedPreferences preferences) {
+        public SharedPreferencesSessionPersistence(SharedPreferences preferences) {
             this.preferences = Objects.requireNonNull(preferences, "preferences");
         }
 

@@ -3,8 +3,13 @@ package com.bitbond.app.api;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 import java.io.IOException;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.util.Collections;
 import java.util.Map;
 
 import org.json.JSONObject;
@@ -87,6 +92,24 @@ public class HttpSupabaseRpcClientTest {
         assertFalse(transport.wasCalled());
     }
 
+    @Test
+    public void defaultUrlConnectionTransportDisconnectsWhenRequestWriteFails() throws Exception {
+        RecordingHttpURLConnection connection = new RecordingHttpURLConnection(new URL("https://api.example.test/rest/v1/rpc/x"));
+        Transport transport = HttpSupabaseRpcClient.urlConnectionTransport(url -> connection);
+
+        try {
+            transport.post(
+                    "https://api.example.test/rest/v1/rpc/x",
+                    Collections.singletonMap("Content-Type", "application/json"),
+                    "{}");
+            fail("Expected IOException");
+        } catch (IOException expected) {
+            assertEquals("write failed", expected.getMessage());
+        }
+
+        assertTrue(connection.disconnected);
+    }
+
     private static final class RecordingTransport implements Transport {
         private final int statusCode;
         private final String responseBody;
@@ -116,6 +139,33 @@ public class HttpSupabaseRpcClientTest {
         @Override
         public TransportResponse post(String url, Map<String, String> headers, String body) throws IOException {
             throw new IOException("network unavailable");
+        }
+    }
+
+    private static final class RecordingHttpURLConnection extends HttpURLConnection {
+        private boolean disconnected;
+
+        private RecordingHttpURLConnection(URL url) {
+            super(url);
+        }
+
+        @Override
+        public void disconnect() {
+            disconnected = true;
+        }
+
+        @Override
+        public boolean usingProxy() {
+            return false;
+        }
+
+        @Override
+        public void connect() {
+        }
+
+        @Override
+        public OutputStream getOutputStream() throws IOException {
+            throw new IOException("write failed");
         }
     }
 }

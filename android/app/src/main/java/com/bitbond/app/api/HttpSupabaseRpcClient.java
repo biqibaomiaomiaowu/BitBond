@@ -26,7 +26,7 @@ public final class HttpSupabaseRpcClient implements SupabaseRpcClient {
     private final Transport transport;
 
     public HttpSupabaseRpcClient(String baseUrl, String anonKey) {
-        this(baseUrl, anonKey, new UrlConnectionTransport());
+        this(baseUrl, anonKey, urlConnectionTransport(url -> (HttpURLConnection) url.openConnection()));
     }
 
     public HttpSupabaseRpcClient(String baseUrl, String anonKey, Transport transport) {
@@ -98,31 +98,51 @@ public final class HttpSupabaseRpcClient implements SupabaseRpcClient {
         return RPC_FUNCTION_NAME.matcher(value).matches();
     }
 
+    static Transport urlConnectionTransport(ConnectionFactory connectionFactory) {
+        return new UrlConnectionTransport(connectionFactory);
+    }
+
+    interface ConnectionFactory {
+        HttpURLConnection open(URL url) throws IOException;
+    }
+
     private static final class UrlConnectionTransport implements Transport {
+        private final ConnectionFactory connectionFactory;
+
+        private UrlConnectionTransport(ConnectionFactory connectionFactory) {
+            this.connectionFactory = Objects.requireNonNull(connectionFactory, "connectionFactory");
+        }
+
         @Override
         public TransportResponse post(String url, Map<String, String> headers, String body) throws IOException {
-            HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
-            connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
-            connection.setReadTimeout(READ_TIMEOUT_MS);
-            connection.setRequestMethod("POST");
-            connection.setDoOutput(true);
+            HttpURLConnection connection = null;
+            try {
+                connection = connectionFactory.open(new URL(url));
+                connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
+                connection.setReadTimeout(READ_TIMEOUT_MS);
+                connection.setRequestMethod("POST");
+                connection.setDoOutput(true);
 
-            for (Map.Entry<String, String> header : headers.entrySet()) {
-                connection.setRequestProperty(header.getKey(), header.getValue());
+                for (Map.Entry<String, String> header : headers.entrySet()) {
+                    connection.setRequestProperty(header.getKey(), header.getValue());
+                }
+
+                byte[] requestBytes = body.getBytes(StandardCharsets.UTF_8);
+                try (OutputStream outputStream = connection.getOutputStream()) {
+                    outputStream.write(requestBytes);
+                }
+
+                int statusCode = connection.getResponseCode();
+                InputStream responseStream = statusCode >= 200 && statusCode < 400
+                        ? connection.getInputStream()
+                        : connection.getErrorStream();
+                String responseBody = readBody(responseStream);
+                return new TransportResponse(statusCode, responseBody);
+            } finally {
+                if (connection != null) {
+                    connection.disconnect();
+                }
             }
-
-            byte[] requestBytes = body.getBytes(StandardCharsets.UTF_8);
-            try (OutputStream outputStream = connection.getOutputStream()) {
-                outputStream.write(requestBytes);
-            }
-
-            int statusCode = connection.getResponseCode();
-            InputStream responseStream = statusCode >= 200 && statusCode < 400
-                    ? connection.getInputStream()
-                    : connection.getErrorStream();
-            String responseBody = readBody(responseStream);
-            connection.disconnect();
-            return new TransportResponse(statusCode, responseBody);
         }
 
         private static String readBody(InputStream inputStream) throws IOException {

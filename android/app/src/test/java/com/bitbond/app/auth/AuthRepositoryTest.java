@@ -103,10 +103,10 @@ public class AuthRepositoryTest {
     }
 
     @Test
-    public void expiredSessionSignsUpAnonymouslyInsteadOfReusingCachedToken() {
+    public void expiredSessionRefreshesWithCachedRefreshTokenBeforeSignup() throws Exception {
         SessionStore store = new SessionStore();
         store.write(new AuthSession("expired-access", "expired-refresh", NOW_EPOCH_SECONDS));
-        RecordingTransport transport = new RecordingTransport(200, authResponse("fresh-access", "fresh-refresh", NOW_EPOCH_SECONDS + 3600L));
+        RecordingTransport transport = new RecordingTransport(200, authResponse("refresh-access", "refresh-refresh", NOW_EPOCH_SECONDS + 3600L));
         FakeRpcClient rpcClient = new FakeRpcClient();
         AuthRepository repository = new AuthRepository(
                 "https://api.example.test",
@@ -119,9 +119,125 @@ public class AuthRepositoryTest {
 
         assertTrue(result.isSuccess());
         assertEquals(1, transport.callCount);
-        assertEquals("fresh-access", result.value().accessToken());
-        assertEquals("fresh-access", store.read().accessToken());
+        assertEquals("https://api.example.test/auth/v1/token?grant_type=refresh_token", transport.url);
+        assertEquals("anon-key", transport.headers.get("apikey"));
+        assertEquals("Bearer anon-key", transport.headers.get("Authorization"));
+        assertEquals("application/json", transport.headers.get("Content-Type"));
+        assertEquals("application/json", transport.headers.get("Accept"));
+        assertEquals("expired-refresh", new JSONObject(transport.body).getString("refresh_token"));
+        assertEquals("refresh-access", result.value().accessToken());
+        assertEquals("refresh-refresh", result.value().refreshToken());
+        assertEquals("refresh-access", store.read().accessToken());
         assertEquals(1, rpcClient.calls.size());
+        assertEquals("refresh-access", rpcClient.calls.get(0).accessToken);
+    }
+
+    @Test
+    public void expiredSessionFallsBackToAnonymousSignupWhenRefreshTokenIsRejected() throws Exception {
+        SessionStore store = new SessionStore();
+        store.write(new AuthSession("expired-access", "expired-refresh", NOW_EPOCH_SECONDS));
+        RecordingTransport transport = new RecordingTransport(
+                response(400, "{}"),
+                response(200, authResponse("signup-access", "signup-refresh", NOW_EPOCH_SECONDS + 3600L)));
+        FakeRpcClient rpcClient = new FakeRpcClient();
+        AuthRepository repository = new AuthRepository(
+                "https://api.example.test",
+                "anon-key",
+                transport,
+                rpcClient,
+                store);
+
+        ApiResult<AuthSession> result = repository.ensureSession(NOW_EPOCH_SECONDS);
+
+        assertTrue(result.isSuccess());
+        assertEquals(2, transport.callCount);
+        assertEquals("https://api.example.test/auth/v1/token?grant_type=refresh_token", transport.requests.get(0).url);
+        assertEquals("expired-refresh", new JSONObject(transport.requests.get(0).body).getString("refresh_token"));
+        assertEquals("https://api.example.test/auth/v1/signup", transport.requests.get(1).url);
+        assertEquals(0, new JSONObject(transport.requests.get(1).body).getJSONObject("data").length());
+        assertEquals("signup-access", result.value().accessToken());
+        assertEquals("signup-refresh", result.value().refreshToken());
+        assertEquals("signup-access", store.read().accessToken());
+        assertEquals(1, rpcClient.calls.size());
+        assertEquals("signup-access", rpcClient.calls.get(0).accessToken);
+    }
+
+    @Test
+    public void expiredSessionDoesNotFallbackToAnonymousSignupWhenRefreshServerFails() {
+        SessionStore store = new SessionStore();
+        AuthSession expiredSession = new AuthSession("expired-access", "expired-refresh", NOW_EPOCH_SECONDS);
+        store.write(expiredSession);
+        RecordingTransport transport = new RecordingTransport(
+                response(500, "{}"),
+                response(200, authResponse("signup-access", "signup-refresh", NOW_EPOCH_SECONDS + 3600L)));
+        FakeRpcClient rpcClient = new FakeRpcClient();
+        AuthRepository repository = new AuthRepository(
+                "https://api.example.test",
+                "anon-key",
+                transport,
+                rpcClient,
+                store);
+
+        ApiResult<AuthSession> result = repository.ensureSession(NOW_EPOCH_SECONDS);
+
+        assertFalse(result.isSuccess());
+        assertEquals("supabase_auth_refresh_http_500", result.error().code());
+        assertFalse(result.error().message().contains("expired-refresh"));
+        assertEquals(1, transport.callCount);
+        assertSame(expiredSession, store.read());
+        assertEquals(0, rpcClient.calls.size());
+    }
+
+    @Test
+    public void expiredSessionDoesNotFallbackToAnonymousSignupWhenRefreshResponseIsMalformed() {
+        SessionStore store = new SessionStore();
+        AuthSession expiredSession = new AuthSession("expired-access", "expired-refresh", NOW_EPOCH_SECONDS);
+        store.write(expiredSession);
+        RecordingTransport transport = new RecordingTransport(
+                response(200, "{}"),
+                response(200, authResponse("signup-access", "signup-refresh", NOW_EPOCH_SECONDS + 3600L)));
+        FakeRpcClient rpcClient = new FakeRpcClient();
+        AuthRepository repository = new AuthRepository(
+                "https://api.example.test",
+                "anon-key",
+                transport,
+                rpcClient,
+                store);
+
+        ApiResult<AuthSession> result = repository.ensureSession(NOW_EPOCH_SECONDS);
+
+        assertFalse(result.isSuccess());
+        assertEquals("supabase_auth_refresh_json_error", result.error().code());
+        assertFalse(result.error().message().contains("expired-refresh"));
+        assertEquals(1, transport.callCount);
+        assertSame(expiredSession, store.read());
+        assertEquals(0, rpcClient.calls.size());
+    }
+
+    @Test
+    public void expiredSessionDoesNotFallbackToAnonymousSignupWhenRefreshNetworkFails() {
+        SessionStore store = new SessionStore();
+        AuthSession expiredSession = new AuthSession("expired-access", "expired-refresh", NOW_EPOCH_SECONDS);
+        store.write(expiredSession);
+        RecordingTransport transport = new RecordingTransport(
+                networkFailure("expired-refresh network failure"),
+                response(200, authResponse("signup-access", "signup-refresh", NOW_EPOCH_SECONDS + 3600L)));
+        FakeRpcClient rpcClient = new FakeRpcClient();
+        AuthRepository repository = new AuthRepository(
+                "https://api.example.test",
+                "anon-key",
+                transport,
+                rpcClient,
+                store);
+
+        ApiResult<AuthSession> result = repository.ensureSession(NOW_EPOCH_SECONDS);
+
+        assertFalse(result.isSuccess());
+        assertEquals("supabase_auth_refresh_network_error", result.error().code());
+        assertFalse(result.error().message().contains("expired-refresh"));
+        assertEquals(1, transport.callCount);
+        assertSame(expiredSession, store.read());
+        assertEquals(0, rpcClient.calls.size());
     }
 
     private static AuthRepository newRepository(RecordingTransport transport) {
@@ -145,17 +261,30 @@ public class AuthRepositoryTest {
         }
     }
 
+    private static TransportStub response(int statusCode, String responseBody) {
+        return new TransportStub(statusCode, responseBody, null);
+    }
+
+    private static TransportStub networkFailure(String message) {
+        return new TransportStub(0, "", new IOException(message));
+    }
+
     private static final class RecordingTransport implements Transport {
-        private final int statusCode;
-        private final String responseBody;
+        private final List<TransportStub> responses = new ArrayList<>();
+        private final List<RequestRecord> requests = new ArrayList<>();
         private int callCount;
         private String url;
         private Map<String, String> headers;
         private String body;
 
         private RecordingTransport(int statusCode, String responseBody) {
-            this.statusCode = statusCode;
-            this.responseBody = responseBody;
+            this(response(statusCode, responseBody));
+        }
+
+        private RecordingTransport(TransportStub... responses) {
+            for (TransportStub response : responses) {
+                this.responses.add(response);
+            }
         }
 
         @Override
@@ -164,7 +293,41 @@ public class AuthRepositoryTest {
             this.url = url;
             this.headers = headers;
             this.body = body;
-            return new TransportResponse(statusCode, responseBody);
+            requests.add(new RequestRecord(url, headers, body));
+            if (callCount > responses.size()) {
+                throw new AssertionError("unexpected transport request");
+            }
+
+            TransportStub response = responses.get(callCount - 1);
+            if (response.exception != null) {
+                throw response.exception;
+            }
+
+            return new TransportResponse(response.statusCode, response.responseBody);
+        }
+    }
+
+    private static final class TransportStub {
+        private final int statusCode;
+        private final String responseBody;
+        private final IOException exception;
+
+        private TransportStub(int statusCode, String responseBody, IOException exception) {
+            this.statusCode = statusCode;
+            this.responseBody = responseBody;
+            this.exception = exception;
+        }
+    }
+
+    private static final class RequestRecord {
+        private final String url;
+        private final Map<String, String> headers;
+        private final String body;
+
+        private RequestRecord(String url, Map<String, String> headers, String body) {
+            this.url = url;
+            this.headers = headers;
+            this.body = body;
         }
     }
 

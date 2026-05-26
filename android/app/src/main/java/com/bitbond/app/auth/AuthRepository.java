@@ -48,12 +48,22 @@ public final class AuthRepository implements AuthGateway {
             return ApiResult.success(cachedSession);
         }
 
-        ApiResult<AuthSession> signupResult = signUpAnonymously(nowEpochSeconds);
-        if (!signupResult.isSuccess()) {
-            return signupResult;
+        ApiResult<AuthSession> sessionResult = null;
+        if (cachedSession != null && hasRefreshToken(cachedSession)) {
+            sessionResult = refreshSession(cachedSession.refreshToken(), nowEpochSeconds);
+            if (!sessionResult.isSuccess() && !isRefreshTokenRejected(sessionResult)) {
+                return sessionResult;
+            }
         }
 
-        AuthSession session = signupResult.value();
+        if (sessionResult == null || !sessionResult.isSuccess()) {
+            sessionResult = signUpAnonymously(nowEpochSeconds);
+            if (!sessionResult.isSuccess()) {
+                return sessionResult;
+            }
+        }
+
+        AuthSession session = sessionResult.value();
         ApiResult<JSONObject> profileResult = rpcClient.rpc(
                 session.accessToken(),
                 ENSURE_USER_PROFILE_RPC,
@@ -66,16 +76,28 @@ public final class AuthRepository implements AuthGateway {
         return ApiResult.success(session);
     }
 
-    private ApiResult<AuthSession> signUpAnonymously(long nowEpochSeconds) {
-        String url = baseUrl + "/auth/v1/signup";
-        Map<String, String> headers = new LinkedHashMap<>();
-        headers.put("apikey", anonKey);
-        headers.put("Authorization", "Bearer " + anonKey);
-        headers.put("Content-Type", CONTENT_TYPE_JSON);
-        headers.put("Accept", CONTENT_TYPE_JSON);
+    private ApiResult<AuthSession> refreshSession(String refreshToken, long nowEpochSeconds) {
+        String url = baseUrl + "/auth/v1/token?grant_type=refresh_token";
 
         try {
-            TransportResponse response = transport.post(url, headers, anonymousSignupBody());
+            TransportResponse response = transport.post(url, authHeaders(), refreshTokenBody(refreshToken));
+            if (response.statusCode < 200 || response.statusCode >= 300) {
+                return ApiResult.error(new ApiError("supabase_auth_refresh_http_" + response.statusCode, "Auth refresh failed"));
+            }
+
+            return ApiResult.success(parseSession(response.body, nowEpochSeconds));
+        } catch (IOException exception) {
+            return ApiResult.error(new ApiError("supabase_auth_refresh_network_error", "Auth refresh failed"));
+        } catch (JSONException | IllegalArgumentException exception) {
+            return ApiResult.error(new ApiError("supabase_auth_refresh_json_error", "Auth refresh response could not be parsed"));
+        }
+    }
+
+    private ApiResult<AuthSession> signUpAnonymously(long nowEpochSeconds) {
+        String url = baseUrl + "/auth/v1/signup";
+
+        try {
+            TransportResponse response = transport.post(url, authHeaders(), anonymousSignupBody());
             if (response.statusCode < 200 || response.statusCode >= 300) {
                 return ApiResult.error(new ApiError("supabase_auth_http_" + response.statusCode, "Anonymous auth failed"));
             }
@@ -86,6 +108,15 @@ public final class AuthRepository implements AuthGateway {
         } catch (JSONException | IllegalArgumentException exception) {
             return ApiResult.error(new ApiError("supabase_auth_json_error", "Auth response could not be parsed"));
         }
+    }
+
+    private Map<String, String> authHeaders() {
+        Map<String, String> headers = new LinkedHashMap<>();
+        headers.put("apikey", anonKey);
+        headers.put("Authorization", "Bearer " + anonKey);
+        headers.put("Content-Type", CONTENT_TYPE_JSON);
+        headers.put("Accept", CONTENT_TYPE_JSON);
+        return headers;
     }
 
     private static AuthSession parseSession(String body, long nowEpochSeconds) throws JSONException {
@@ -108,6 +139,22 @@ public final class AuthRepository implements AuthGateway {
         return new JSONObject()
                 .put("data", new JSONObject())
                 .toString();
+    }
+
+    private static String refreshTokenBody(String refreshToken) throws JSONException {
+        return new JSONObject()
+                .put("refresh_token", refreshToken)
+                .toString();
+    }
+
+    private static boolean hasRefreshToken(AuthSession session) {
+        return !normalize(session.refreshToken()).isEmpty();
+    }
+
+    private static boolean isRefreshTokenRejected(ApiResult<AuthSession> result) {
+        String code = result.error().code();
+        return "supabase_auth_refresh_http_400".equals(code)
+                || "supabase_auth_refresh_http_401".equals(code);
     }
 
     private static String stripTrailingSlash(String value) {

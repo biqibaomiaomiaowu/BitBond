@@ -4,6 +4,8 @@ import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue';
 import * as bitbondState from './lib/bitbondState.mjs';
 // @ts-expect-error bridgeClient is authored as .mjs for Android/web sharing in this phase.
 import { callBridgeMethod as invokeBridgeMethod, normalizeBridgeJson } from './lib/bridgeClient.mjs';
+// @ts-expect-error partnerStatusAutoRefresh is authored as .mjs for Android/web sharing in this phase.
+import { createPartnerStatusAutoRefresh } from './lib/partnerStatusAutoRefresh.mjs';
 
 const {
   advanceRoomMotionPhase,
@@ -70,6 +72,10 @@ type BitBondBridge = {
   getInitialState?: () => BridgeJsonValue | Promise<BridgeJsonValue>;
   checkUsageAccess?: () => BridgeJsonValue | Promise<BridgeJsonValue>;
   openUsageAccessSettings?: () => BridgeJsonValue | Promise<BridgeJsonValue>;
+  checkAccessibilityAccess?: () => BridgeJsonValue | Promise<BridgeJsonValue>;
+  openAccessibilitySettings?: () => BridgeJsonValue | Promise<BridgeJsonValue>;
+  checkBatteryOptimization?: () => BridgeJsonValue | Promise<BridgeJsonValue>;
+  openBatteryOptimizationSettings?: () => BridgeJsonValue | Promise<BridgeJsonValue>;
   getDebugForegroundApp?: () => BridgeJsonValue | Promise<BridgeJsonValue>;
   createPairInvite?: () => BridgeJsonValue | Promise<BridgeJsonValue>;
   acceptPairInvite?: (payload: string) => BridgeJsonValue | Promise<BridgeJsonValue>;
@@ -118,7 +124,11 @@ const assetPaths = {
 
 const state = ref<BridgeState>(createFallbackBridgeState());
 const activeView = shallowRef<AppView>('home');
-const usageAccess = ref({ hasUsageAccess: false });
+const statusAccess = ref({
+  hasUsageAccess: false,
+  hasAccessibilityAccess: false,
+  isIgnoringBatteryOptimizations: false,
+});
 const bridgeAvatars = ref<Array<Record<string, unknown>>>([]);
 const debugForeground = ref<Record<string, unknown>>({ enabled: false });
 const acceptCode = shallowRef('');
@@ -134,10 +144,17 @@ const refreshing = shallowRef(false);
 const uploading = shallowRef(false);
 const pairingBusy = shallowRef<'idle' | 'create' | 'accept'>('idle');
 const avatarBusy = shallowRef<'idle' | 'list' | 'select'>('idle');
-const permissionBusy = shallowRef<'idle' | 'check' | 'open'>('idle');
+const permissionBusy = shallowRef<'idle' | 'check' | 'open-usage' | 'open-accessibility' | 'open-battery'>('idle');
 const debugBusy = shallowRef(false);
 const unlinking = shallowRef(false);
 let roomMotionTimer: number | undefined;
+let partnerStatusAutoRefresh:
+  | {
+      attach: () => void;
+      detach: () => void;
+      sync: () => void;
+    }
+  | undefined;
 
 const currentStatus = computed(
   () => visibleStatusConfigs.find((item) => item.code === state.value.partner.statusCode) ?? visibleStatusConfigs[6],
@@ -148,7 +165,7 @@ const viewTitle = computed(() => viewTitles[activeView.value]);
 const noticeMessage = computed(() => state.value.notice.message || localMessage.value);
 const noticeKind = computed(() => state.value.notice.kind || 'idle');
 const roomPresentation = computed(() => getRoomPresentation(state.value.partner.statusCode));
-const permissionViewModel = computed(() => buildPermissionViewModel(usageAccess.value));
+const permissionViewModel = computed(() => buildPermissionViewModel(statusAccess.value));
 const pairingViewModel = computed(() => buildPairingViewModel(state.value));
 const avatarViewModel = computed(() =>
   buildAvatarViewModel({
@@ -178,11 +195,22 @@ const roomSpriteLabel = computed(() =>
 
 onMounted(async () => {
   await initializeBridge();
-  void checkUsageAccess({ silent: true });
+  const autoRefresh = createPartnerStatusAutoRefresh({
+    windowObject: window,
+    documentObject: document,
+    getBridgeReady: () => state.value.bridge.ready,
+    getPaired: () => state.value.pair.paired,
+    refresh: refreshPartnerStatus,
+  });
+  partnerStatusAutoRefresh = autoRefresh;
+  autoRefresh.attach();
+  void checkStatusAccess({ silent: true });
   void listAvatars({ silent: true });
 });
 
 onUnmounted(() => {
+  partnerStatusAutoRefresh?.detach();
+  partnerStatusAutoRefresh = undefined;
   clearRoomMotionTimer();
 });
 
@@ -192,6 +220,13 @@ watch(
     startRoomMotion(statusCode, previousStatusCode !== undefined);
   },
   { immediate: true },
+);
+
+watch(
+  () => [state.value.bridge.ready, state.value.pair.paired] as const,
+  () => {
+    partnerStatusAutoRefresh?.sync();
+  },
 );
 
 async function initializeBridge() {
@@ -302,8 +337,9 @@ async function refreshPartnerStatus() {
   }
 
   refreshing.value = true;
-  const fallbackStatusCode = nextPreviewStatusCode();
-  const rawResult = await callBridgeMethod('refreshPartnerStatus', {
+  try {
+    const fallbackStatusCode = nextPreviewStatusCode();
+    const rawResult = await callBridgeMethod('refreshPartnerStatus', {
     ok: true,
     data: {
       upload: {
@@ -321,8 +357,10 @@ async function refreshPartnerStatus() {
     },
   });
 
-  state.value = applyPartnerStatusResult(state.value, rawResult);
-  refreshing.value = false;
+    state.value = applyPartnerStatusResult(state.value, rawResult);
+  } finally {
+    refreshing.value = false;
+  }
 }
 
 async function uploadCurrentStatus() {
@@ -439,27 +477,49 @@ async function selectAvatar(avatarId: string) {
   avatarBusy.value = 'idle';
 }
 
-async function checkUsageAccess(options: { silent?: boolean } = {}) {
+async function checkStatusAccess(options: { silent?: boolean } = {}) {
   if (permissionBusy.value !== 'idle') {
     return;
   }
 
   permissionBusy.value = 'check';
-  const rawResult = await callBridgeMethod('checkUsageAccess', {
-    ok: true,
-    data: {
-      hasUsageAccess: false,
-    },
-  });
-  const data = readBridgeData(rawResult);
+  const [usageRawResult, accessibilityRawResult, batteryRawResult] = await Promise.all([
+    callBridgeMethod('checkUsageAccess', {
+      ok: true,
+      data: {
+        hasUsageAccess: false,
+      },
+    }),
+    callBridgeMethod('checkAccessibilityAccess', {
+      ok: true,
+      data: {
+        hasAccessibilityAccess: false,
+      },
+    }),
+    callBridgeMethod('checkBatteryOptimization', {
+      ok: true,
+      data: {
+        isIgnoringBatteryOptimizations: false,
+      },
+    }),
+  ]);
+  const usageData = readBridgeData(usageRawResult);
+  const accessibilityData = readBridgeData(accessibilityRawResult);
+  const batteryData = readBridgeData(batteryRawResult);
 
-  usageAccess.value = {
-    hasUsageAccess: data.hasUsageAccess === true,
+  statusAccess.value = {
+    hasUsageAccess: usageData.hasUsageAccess === true,
+    hasAccessibilityAccess: accessibilityData.hasAccessibilityAccess === true,
+    isIgnoringBatteryOptimizations: batteryData.isIgnoringBatteryOptimizations === true,
   };
   if (!options.silent) {
+    const allChecksOk =
+      bridgeResultOk(usageRawResult) &&
+      bridgeResultOk(accessibilityRawResult) &&
+      bridgeResultOk(batteryRawResult);
     setNotice(
-      bridgeResultOk(rawResult) ? 'success' : 'error',
-      data.hasUsageAccess === true ? '使用情况访问权限已开启' : '还未开启使用情况访问权限',
+      allChecksOk ? 'success' : 'error',
+      statusAccessNotice(statusAccess.value),
     );
   }
   permissionBusy.value = 'idle';
@@ -470,7 +530,7 @@ async function openUsageAccessSettings() {
     return;
   }
 
-  permissionBusy.value = 'open';
+  permissionBusy.value = 'open-usage';
   const rawResult = await callBridgeMethod('openUsageAccessSettings', {
     ok: true,
     data: {
@@ -480,6 +540,66 @@ async function openUsageAccessSettings() {
 
   setNotice(bridgeResultOk(rawResult) ? 'success' : 'error', bridgeResultOk(rawResult) ? '已打开系统权限设置' : '无法打开系统权限设置');
   permissionBusy.value = 'idle';
+}
+
+async function openAccessibilitySettings() {
+  if (permissionBusy.value !== 'idle') {
+    return;
+  }
+
+  permissionBusy.value = 'open-accessibility';
+  const rawResult = await callBridgeMethod('openAccessibilitySettings', {
+    ok: true,
+    data: {
+      opened: true,
+    },
+  });
+
+  setNotice(
+    bridgeResultOk(rawResult) ? 'success' : 'error',
+    bridgeResultOk(rawResult) ? '已打开无障碍设置' : '无法打开无障碍设置',
+  );
+  permissionBusy.value = 'idle';
+}
+
+async function openBatteryOptimizationSettings() {
+  if (permissionBusy.value !== 'idle') {
+    return;
+  }
+
+  permissionBusy.value = 'open-battery';
+  const rawResult = await callBridgeMethod('openBatteryOptimizationSettings', {
+    ok: true,
+    data: {
+      opened: true,
+    },
+  });
+
+  setNotice(
+    bridgeResultOk(rawResult) ? 'success' : 'error',
+    bridgeResultOk(rawResult) ? '已打开电池优化设置' : '无法打开电池优化设置',
+  );
+  permissionBusy.value = 'idle';
+}
+
+function statusAccessNotice(access: {
+  hasUsageAccess: boolean;
+  hasAccessibilityAccess: boolean;
+  isIgnoringBatteryOptimizations: boolean;
+}) {
+  if (access.hasAccessibilityAccess && access.isIgnoringBatteryOptimizations) {
+    return '实时刷新已开启，电池优化已放行';
+  }
+  if (access.hasAccessibilityAccess) {
+    return '实时刷新已开启，建议再放行电池优化';
+  }
+  if (access.hasUsageAccess && access.isIgnoringBatteryOptimizations) {
+    return '轮询刷新已开启，系统仍可能延迟后台任务';
+  }
+  if (access.hasUsageAccess) {
+    return '轮询刷新已开启，建议放行电池优化以减少延迟';
+  }
+  return '还未开启状态刷新权限';
 }
 
 async function getDebugForegroundApp() {
@@ -723,24 +843,67 @@ function nextPreviewStatusCode() {
           <section class="panel">
             <div class="section-head">
               <div>
-                <p class="section-label">Usage Access</p>
+                <p class="section-label">Status Sync</p>
                 <h2>{{ permissionViewModel.title }}</h2>
               </div>
-              <span class="status-chip">{{ permissionViewModel.hasUsageAccess ? '已开启' : '未开启' }}</span>
+              <span class="status-chip">
+                {{ permissionViewModel.mode === 'accessibility' ? '实时' : permissionViewModel.mode === 'polling' ? '轮询' : '未开启' }}
+              </span>
             </div>
             <p class="body-copy">{{ permissionViewModel.description }}</p>
+            <div class="permission-options">
+              <div class="permission-option">
+                <div>
+                  <strong>无障碍实时刷新</strong>
+                  <small>切换应用时触发上传，只读取应用包名</small>
+                </div>
+                <span class="status-chip">{{ permissionViewModel.hasAccessibilityAccess ? '已开启' : '可选' }}</span>
+              </div>
+              <div class="permission-option">
+                <div>
+                  <strong>UsageStats 轮询刷新</strong>
+                  <small>不开无障碍时使用，后台及时性受系统限制</small>
+                </div>
+                <span class="status-chip">{{ permissionViewModel.hasUsageAccess ? '已开启' : '未开启' }}</span>
+              </div>
+              <div class="permission-option">
+                <div>
+                  <strong>电池优化放行</strong>
+                  <small>减少小米等系统延迟后台轮询和上传</small>
+                </div>
+                <span class="status-chip">{{ permissionViewModel.isIgnoringBatteryOptimizations ? '已放行' : '建议设置' }}</span>
+              </div>
+            </div>
             <div class="action-grid">
-              <button class="secondary-button" type="button" :disabled="permissionBusy !== 'idle'" @click="checkUsageAccess()">
+              <button class="secondary-button" type="button" :disabled="permissionBusy !== 'idle'" @click="checkStatusAccess()">
                 {{ permissionBusy === 'check' ? '检查中' : '检查权限' }}
               </button>
               <button
-                v-if="!permissionViewModel.hasUsageAccess"
+                v-if="!permissionViewModel.hasUsageAccess && !permissionViewModel.hasAccessibilityAccess"
                 class="primary-button"
                 type="button"
                 :disabled="permissionBusy !== 'idle'"
                 @click="openUsageAccessSettings"
               >
-                {{ permissionBusy === 'open' ? '打开中' : '打开系统设置' }}
+                {{ permissionBusy === 'open-usage' ? '打开中' : '开启轮询' }}
+              </button>
+              <button
+                v-if="!permissionViewModel.hasAccessibilityAccess"
+                :class="permissionViewModel.mode === 'missing' ? 'primary-button' : 'secondary-button'"
+                type="button"
+                :disabled="permissionBusy !== 'idle'"
+                @click="openAccessibilitySettings"
+              >
+                {{ permissionBusy === 'open-accessibility' ? '打开中' : '开启实时' }}
+              </button>
+              <button
+                v-if="!permissionViewModel.isIgnoringBatteryOptimizations"
+                class="secondary-button"
+                type="button"
+                :disabled="permissionBusy !== 'idle'"
+                @click="openBatteryOptimizationSettings"
+              >
+                {{ permissionBusy === 'open-battery' ? '打开中' : '电池优化' }}
               </button>
             </div>
           </section>

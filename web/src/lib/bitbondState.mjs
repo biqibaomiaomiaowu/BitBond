@@ -435,14 +435,29 @@ export function advanceRoomMotionPhase(roomMotion, motionResult = {}) {
 }
 
 export function buildPermissionViewModel(usageAccess) {
-  const hasUsageAccess = pickObject(usageAccess).hasUsageAccess === true;
+  const access = pickObject(usageAccess);
+  const hasUsageAccess = access.hasUsageAccess === true;
+  const hasAccessibilityAccess = access.hasAccessibilityAccess === true;
+  const isIgnoringBatteryOptimizations = access.isIgnoringBatteryOptimizations === true;
+  const mode = hasAccessibilityAccess ? 'accessibility' : hasUsageAccess ? 'polling' : 'missing';
 
   return {
     hasUsageAccess,
-    title: hasUsageAccess ? '权限已开启' : '需要开启使用情况访问权限',
-    description: hasUsageAccess
-      ? 'BitBond 可以把前台应用映射为抽象状态。'
-      : '开启后只会上传抽象状态类别，不上传具体应用或内容。',
+    hasAccessibilityAccess,
+    isIgnoringBatteryOptimizations,
+    mode,
+    title:
+      mode === 'accessibility'
+        ? '实时刷新已开启'
+        : mode === 'polling'
+          ? '轮询刷新已开启'
+          : '需要开启状态刷新权限',
+    description:
+      mode === 'accessibility'
+        ? '切换应用会通过无障碍事件触发上传；只读取应用包名，不读取屏幕内容。'
+        : mode === 'polling'
+          ? '未开启无障碍时，BitBond 会尽量用使用情况访问进行后台轮询；部分系统可能延迟。'
+          : '至少开启使用情况访问；需要更及时刷新时，可以开启无障碍事件模式。',
     actions: [
       {
         id: 'check-usage-access',
@@ -450,8 +465,20 @@ export function buildPermissionViewModel(usageAccess) {
         bridgeMethod: 'checkUsageAccess',
         kind: 'secondary',
       },
+      {
+        id: 'check-accessibility-access',
+        label: '检查无障碍',
+        bridgeMethod: 'checkAccessibilityAccess',
+        kind: 'secondary',
+      },
+      {
+        id: 'check-battery-optimization',
+        label: '检查电池优化',
+        bridgeMethod: 'checkBatteryOptimization',
+        kind: 'secondary',
+      },
       ...(
-        hasUsageAccess
+        hasUsageAccess || hasAccessibilityAccess
           ? []
           : [
               {
@@ -459,6 +486,30 @@ export function buildPermissionViewModel(usageAccess) {
                 label: '打开系统设置',
                 bridgeMethod: 'openUsageAccessSettings',
                 kind: 'primary',
+              },
+            ]
+      ),
+      ...(
+        hasAccessibilityAccess
+          ? []
+          : [
+              {
+                id: 'open-accessibility-settings',
+                label: '打开无障碍设置',
+                bridgeMethod: 'openAccessibilitySettings',
+                kind: mode === 'missing' ? 'primary' : 'secondary',
+              },
+            ]
+      ),
+      ...(
+        isIgnoringBatteryOptimizations
+          ? []
+          : [
+              {
+                id: 'open-battery-optimization-settings',
+                label: '打开电池优化设置',
+                bridgeMethod: 'openBatteryOptimizationSettings',
+                kind: 'secondary',
               },
             ]
       ),

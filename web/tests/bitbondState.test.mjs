@@ -435,13 +435,69 @@ test('applyUnlinkResult keeps paired state when bridge rejects or returns malfor
   assert.equal(malformed.notice.kind, 'error');
 });
 
-test('permission view model shows settings action when usage access is false', () => {
-  const viewModel = buildPermissionViewModel({ hasUsageAccess: false });
+test('permission view model shows both setup actions when no status sync permission is enabled', () => {
+  const viewModel = buildPermissionViewModel({
+    hasUsageAccess: false,
+    hasAccessibilityAccess: false,
+    isIgnoringBatteryOptimizations: false,
+  });
 
   assert.equal(viewModel.hasUsageAccess, false);
+  assert.equal(viewModel.hasAccessibilityAccess, false);
+  assert.equal(viewModel.isIgnoringBatteryOptimizations, false);
+  assert.equal(viewModel.mode, 'missing');
   assert.deepEqual(
     viewModel.actions.map((action) => action.bridgeMethod),
-    ['checkUsageAccess', 'openUsageAccessSettings'],
+    [
+      'checkUsageAccess',
+      'checkAccessibilityAccess',
+      'checkBatteryOptimization',
+      'openUsageAccessSettings',
+      'openAccessibilitySettings',
+      'openBatteryOptimizationSettings',
+    ],
+  );
+});
+
+test('permission view model treats usage access as polling fallback when accessibility is disabled', () => {
+  const viewModel = buildPermissionViewModel({
+    hasUsageAccess: true,
+    hasAccessibilityAccess: false,
+    isIgnoringBatteryOptimizations: false,
+  });
+
+  assert.equal(viewModel.mode, 'polling');
+  assert.equal(viewModel.isIgnoringBatteryOptimizations, false);
+  assert.match(viewModel.description, /轮询/);
+  assert.deepEqual(
+    viewModel.actions.map((action) => action.bridgeMethod),
+    [
+      'checkUsageAccess',
+      'checkAccessibilityAccess',
+      'checkBatteryOptimization',
+      'openAccessibilitySettings',
+      'openBatteryOptimizationSettings',
+    ],
+  );
+});
+
+test('permission view model prefers accessibility event mode when enabled', () => {
+  const viewModel = buildPermissionViewModel({
+    hasUsageAccess: false,
+    hasAccessibilityAccess: true,
+    isIgnoringBatteryOptimizations: false,
+  });
+
+  assert.equal(viewModel.mode, 'accessibility');
+  assert.match(viewModel.description, /不读取屏幕内容/);
+  assert.deepEqual(
+    viewModel.actions.map((action) => action.bridgeMethod),
+    [
+      'checkUsageAccess',
+      'checkAccessibilityAccess',
+      'checkBatteryOptimization',
+      'openBatteryOptimizationSettings',
+    ],
   );
 });
 

@@ -5,6 +5,10 @@ export const statusConfigs = [
     statusText: '正在刷短视频',
     areaLabel: '沙发角',
     propFile: 'prop_short_video_phone.png',
+    roomCandidates: ['sofa_corner', 'window_seat'],
+    propFrame: 0,
+    movePhase: { name: 'move', sprite: 'walk', durationMs: 900 },
+    actionPhase: { name: 'action', sprite: 'watch_phone', durationMs: 1400 },
   },
   {
     code: 'watching_show',
@@ -12,6 +16,10 @@ export const statusConfigs = [
     statusText: '正在追剧',
     areaLabel: '电视旁',
     propFile: 'prop_watching_show_tv.png',
+    roomCandidates: ['tv_side', 'sofa_center'],
+    propFrame: 1,
+    movePhase: { name: 'move', sprite: 'walk', durationMs: 900 },
+    actionPhase: { name: 'action', sprite: 'watch_tv', durationMs: 1600 },
   },
   {
     code: 'reading',
@@ -19,6 +27,10 @@ export const statusConfigs = [
     statusText: '正在阅读',
     areaLabel: '书架前',
     propFile: 'prop_reading_book.png',
+    roomCandidates: ['bookshelf', 'desk'],
+    propFrame: 2,
+    movePhase: { name: 'move', sprite: 'walk', durationMs: 900 },
+    actionPhase: { name: 'action', sprite: 'read', durationMs: 1500 },
   },
   {
     code: 'music',
@@ -26,6 +38,10 @@ export const statusConfigs = [
     statusText: '正在听音乐',
     areaLabel: '音响旁',
     propFile: 'prop_music_headphone.png',
+    roomCandidates: ['speaker_side', 'rug_center'],
+    propFrame: 3,
+    movePhase: { name: 'move', sprite: 'walk', durationMs: 900 },
+    actionPhase: { name: 'action', sprite: 'listen_music', durationMs: 1500 },
   },
   {
     code: 'gaming',
@@ -33,6 +49,10 @@ export const statusConfigs = [
     statusText: '正在游戏',
     areaLabel: '地毯边',
     propFile: 'prop_gaming_gamepad.png',
+    roomCandidates: ['rug_edge', 'desk'],
+    propFrame: 4,
+    movePhase: { name: 'move', sprite: 'walk', durationMs: 900 },
+    actionPhase: { name: 'action', sprite: 'play_game', durationMs: 1300 },
   },
   {
     code: 'social',
@@ -40,6 +60,10 @@ export const statusConfigs = [
     statusText: '正在聊天',
     areaLabel: '窗边',
     propFile: 'prop_social_bubble.png',
+    roomCandidates: ['window_side', 'sofa_corner'],
+    propFrame: 5,
+    movePhase: { name: 'move', sprite: 'walk', durationMs: 900 },
+    actionPhase: { name: 'action', sprite: 'chat', durationMs: 1300 },
   },
   {
     code: 'online',
@@ -47,6 +71,10 @@ export const statusConfigs = [
     statusText: '刚刚在线',
     areaLabel: '房间中央',
     propFile: 'prop_online_presence.png',
+    roomCandidates: ['room_center', 'door_side'],
+    propFrame: 6,
+    movePhase: { name: 'move', sprite: 'walk', durationMs: 900 },
+    actionPhase: { name: 'action', sprite: 'idle', durationMs: 1200 },
   },
   {
     code: 'resting',
@@ -54,6 +82,10 @@ export const statusConfigs = [
     statusText: '正在休息',
     areaLabel: '床边',
     propFile: 'prop_resting_moon.png',
+    roomCandidates: ['bed_side', 'window_seat'],
+    propFrame: 7,
+    movePhase: { name: 'move', sprite: 'walk', durationMs: 900 },
+    actionPhase: { name: 'action', sprite: 'rest', durationMs: 1700 },
   },
   {
     code: 'offline',
@@ -61,6 +93,10 @@ export const statusConfigs = [
     statusText: '暂时离线',
     areaLabel: '门口',
     propFile: 'prop_offline_cloud.png',
+    roomCandidates: ['doorway', 'room_center'],
+    propFrame: 8,
+    movePhase: { name: 'move', sprite: 'walk', durationMs: 900 },
+    actionPhase: { name: 'action', sprite: 'idle', durationMs: 1200 },
   },
   {
     code: 'paused',
@@ -68,6 +104,10 @@ export const statusConfigs = [
     statusText: '已暂停共享',
     areaLabel: '隐私模式',
     propFile: 'prop_paused_badge.png',
+    roomCandidates: ['privacy_corner', 'bed_side'],
+    propFrame: 9,
+    movePhase: { name: 'move', sprite: 'walk', durationMs: 900 },
+    actionPhase: { name: 'action', sprite: 'idle', durationMs: 1200 },
   },
 ];
 
@@ -130,6 +170,70 @@ export function buildInitialState(rawBridgeJson) {
   };
 }
 
+export function applyPairInviteResult(currentState, rawBridgeJson) {
+  const parsed = parseBridgeJson(rawBridgeJson);
+
+  if (parsed?.ok !== true) {
+    return {
+      ...currentState,
+      notice: {
+        kind: 'error',
+        message: '生成配对码失败，请稍后再试',
+      },
+    };
+  }
+
+  const data = pickDataObject(parsed);
+  const inviteCode = typeof data.code === 'string' ? data.code : '';
+
+  return {
+    ...currentState,
+    pair: {
+      ...currentState.pair,
+      inviteCode,
+      expiresAt: typeof data.expiresAt === 'string' ? data.expiresAt : '',
+    },
+    notice: {
+      kind: 'success',
+      message: '配对码已生成',
+    },
+  };
+}
+
+export function applyAcceptInviteResult(currentState, rawBridgeJson) {
+  const parsed = parseBridgeJson(rawBridgeJson);
+  const data = pickDataObject(parsed);
+
+  if (parsed?.ok !== true || data.paired !== true) {
+    return {
+      ...currentState,
+      notice: {
+        kind: 'error',
+        message: '接受邀请失败，请确认配对码后重试',
+      },
+    };
+  }
+
+  const partner = pickObject(data.partner);
+  const nickname = typeof partner.nickname === 'string' ? partner.nickname : currentState.pair.nickname;
+
+  return {
+    ...currentState,
+    pair: {
+      ...currentState.pair,
+      paired: true,
+      nickname,
+      coupleId: typeof data.coupleId === 'string' ? data.coupleId : currentState.pair.coupleId,
+      inviteCode: '',
+      expiresAt: undefined,
+    },
+    notice: {
+      kind: 'success',
+      message: '已完成配对',
+    },
+  };
+}
+
 export function applyUnlinkResult(currentState, rawBridgeJson) {
   const parsed = parseBridgeJson(rawBridgeJson);
 
@@ -151,6 +255,9 @@ export function applyUnlinkResult(currentState, rawBridgeJson) {
       ...currentState.pair,
       paired: false,
       nickname: '',
+      inviteCode: '',
+      expiresAt: '',
+      coupleId: '',
     },
     partner: {
       statusCode: offline.code,
@@ -162,6 +269,157 @@ export function applyUnlinkResult(currentState, rawBridgeJson) {
       kind: 'success',
       message: '已解除配对',
     },
+  };
+}
+
+export function applyAvatarSelectionResult(currentState, rawBridgeJson) {
+  const parsed = parseBridgeJson(rawBridgeJson);
+  const data = pickDataObject(parsed);
+
+  if (parsed?.ok !== true || typeof data.avatarId !== 'string') {
+    return {
+      ...currentState,
+      notice: {
+        kind: 'error',
+        message: '头像更新失败，请稍后再试',
+      },
+    };
+  }
+
+  return {
+    ...currentState,
+    self: {
+      ...currentState.self,
+      selectedAvatar: data.avatarId,
+    },
+    notice: {
+      kind: 'success',
+      message: '头像已更新',
+    },
+  };
+}
+
+export function applyPartnerStatusResult(currentState, rawBridgeJson) {
+  const parsed = parseBridgeJson(rawBridgeJson);
+
+  if (parsed?.ok !== true) {
+    return {
+      ...currentState,
+      notice: {
+        kind: 'error',
+        message: '状态同步失败，请稍后再试',
+      },
+    };
+  }
+
+  const data = pickDataObject(parsed);
+  const partnerStatus = pickObject(data.partnerStatus);
+  const partner = pickObject(partnerStatus.partner);
+
+  if (partnerStatus.paired === false) {
+    const offline = getStatusConfig('offline');
+
+    return {
+      ...currentState,
+      pair: {
+        ...currentState.pair,
+        paired: false,
+        nickname: '',
+        inviteCode: '',
+        expiresAt: '',
+        coupleId: '',
+      },
+      partner: {
+        statusCode: offline.code,
+        statusText: offline.statusText,
+        updatedAt: '未配对',
+        areaLabel: offline.areaLabel,
+      },
+      notice: {
+        kind: 'success',
+        message: '状态已更新',
+      },
+    };
+  }
+
+  const statusCode =
+    partnerStatus.isPaused === true
+      ? 'paused'
+      : typeof partnerStatus.statusCode === 'string'
+        ? partnerStatus.statusCode
+        : currentState.partner?.statusCode;
+  const updatedAt =
+    typeof partnerStatus.statusUpdatedAt === 'string'
+      ? partnerStatus.statusUpdatedAt
+      : partnerStatus.updatedAt;
+
+  return {
+    ...currentState,
+    pair: {
+      ...currentState.pair,
+      paired: typeof partnerStatus.paired === 'boolean' ? partnerStatus.paired : currentState.pair.paired,
+      nickname: typeof partner.nickname === 'string' ? partner.nickname : currentState.pair.nickname,
+    },
+    partner: sanitizePartner(
+      {
+        statusCode,
+        updatedAt,
+      },
+      currentState.partner,
+    ),
+    notice: {
+      kind: 'success',
+      message: '状态已更新',
+    },
+  };
+}
+
+export function applyDebugForegroundResult(currentState, rawBridgeJson) {
+  const parsed = parseBridgeJson(rawBridgeJson);
+  const data = pickDataObject(parsed);
+
+  if (parsed?.ok !== true) {
+    return {
+      ...currentState,
+      notice: {
+        kind: 'error',
+        message: '调试前台状态读取失败',
+      },
+    };
+  }
+
+  return {
+    ...currentState,
+    debugForeground: {
+      enabled: data.enabled === true,
+    },
+  };
+}
+
+export function getRoomPresentation(statusCode) {
+  const status = getStatusConfig(statusCode);
+
+  return {
+    statusCode: status.code,
+    roomCandidates: [...status.roomCandidates],
+    propFrame: status.propFrame,
+    movePhase: { ...status.movePhase },
+    actionPhase: { ...status.actionPhase },
+  };
+}
+
+export function advanceRoomMotionPhase(roomMotion, motionResult = {}) {
+  const currentMotion = roomMotion && typeof roomMotion === 'object' ? roomMotion : { phase: 'move' };
+
+  if (currentMotion.phase === 'move' && motionResult.movementComplete === true) {
+    return {
+      ...currentMotion,
+      phase: 'action',
+    };
+  }
+
+  return {
+    ...currentMotion,
   };
 }
 
@@ -181,6 +439,14 @@ function sanitizePartner(partner, fallbackPartner) {
   };
 
   return safePartner;
+}
+
+function pickDataObject(parsed) {
+  return pickObject(parsed?.data);
+}
+
+function pickObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
 
 function parseBridgeJson(rawBridgeJson) {

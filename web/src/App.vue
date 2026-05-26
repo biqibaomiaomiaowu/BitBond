@@ -2,6 +2,8 @@
 import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue';
 // @ts-expect-error bitbondState is authored as .mjs for Android/web sharing in this phase.
 import * as bitbondState from './lib/bitbondState.mjs';
+// @ts-expect-error bridgeClient is authored as .mjs for Android/web sharing in this phase.
+import { callBridgeMethod as invokeBridgeMethod, normalizeBridgeJson } from './lib/bridgeClient.mjs';
 
 const {
   advanceRoomMotionPhase,
@@ -254,33 +256,7 @@ async function callBridgeMethod(
   fallback: Record<string, unknown>,
   payload?: string,
 ) {
-  const bridge = getBridge();
-  const bridgeMethod = bridge?.[method];
-
-  if (typeof bridgeMethod !== 'function') {
-    return JSON.stringify(fallback);
-  }
-
-  try {
-    const rawResult =
-      payload === undefined
-        ? await (bridgeMethod as () => BridgeJsonValue | Promise<BridgeJsonValue>)()
-        : await (bridgeMethod as (payload: string) => BridgeJsonValue | Promise<BridgeJsonValue>)(payload);
-
-    return normalizeBridgeJson(rawResult, fallback);
-  } catch {
-    return JSON.stringify({ ok: false });
-  }
-}
-
-function normalizeBridgeJson(value: BridgeJsonValue, fallback: Record<string, unknown> | null) {
-  if (typeof value === 'string') {
-    return value;
-  }
-  if (value && typeof value === 'object') {
-    return JSON.stringify(value);
-  }
-  return fallback ? JSON.stringify(fallback) : '';
+  return invokeBridgeMethod(getBridge(), method, fallback, payload);
 }
 
 function parseBridgeObject(rawBridgeJson: string) {

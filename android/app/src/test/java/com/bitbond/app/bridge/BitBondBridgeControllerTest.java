@@ -76,14 +76,33 @@ public class BitBondBridgeControllerTest {
     }
 
     @Test
-    public void getInitialStateAuthFailureReturnsFrontendCompatibleOfflineState() throws Exception {
+    public void getInitialStateAuthFailureKeepsBridgeReadyWithOfflineState() throws Exception {
         Fixtures fixtures = new Fixtures();
         fixtures.auth.result = ApiResult.error(new ApiError("auth_failed", "Auth failed"));
 
         JSONObject response = json(fixtures.controller().getInitialState());
 
         assertFalse(response.has("ok"));
-        assertFalse(response.getJSONObject("bridge").getBoolean("ready"));
+        assertTrue(response.getJSONObject("bridge").getBoolean("ready"));
+        assertEquals("Android WebView bridge connected", response.getJSONObject("bridge").getString("message"));
+        assertFalse(response.toString().contains("浏览器预览"));
+        assertFalse(response.toString().contains("Bridge 初始化失败"));
+        assertFalse(response.getJSONObject("pair").getBoolean("paired"));
+        assertEquals("offline", response.getJSONObject("partner").getString("statusCode"));
+    }
+
+    @Test
+    public void getInitialStatePairingFailureKeepsBridgeReadyWithOfflineState() throws Exception {
+        Fixtures fixtures = new Fixtures();
+        fixtures.pairing.currentCoupleResult = ApiResult.error(new ApiError("pairing_failed", "Pairing failed"));
+
+        JSONObject response = json(fixtures.controller().getInitialState());
+
+        assertFalse(response.has("ok"));
+        assertTrue(response.getJSONObject("bridge").getBoolean("ready"));
+        assertEquals("Android WebView bridge connected", response.getJSONObject("bridge").getString("message"));
+        assertFalse(response.toString().contains("浏览器预览"));
+        assertFalse(response.toString().contains("Bridge 初始化失败"));
         assertFalse(response.getJSONObject("pair").getBoolean("paired"));
         assertEquals("offline", response.getJSONObject("partner").getString("statusCode"));
     }
@@ -436,6 +455,7 @@ public class BitBondBridgeControllerTest {
         private PairInvite invite = new PairInvite("654321", "2026-05-26T12:00:00Z");
         private CoupleState acceptedCouple = CoupleState.paired("couple-accepted", new PartnerProfile("Partner", null));
         private CoupleState currentCouple = CoupleState.unpaired();
+        private ApiResult<CoupleState> currentCoupleResult;
         private String lastAcceptedCode;
         private int acceptCallCount;
 
@@ -460,6 +480,9 @@ public class BitBondBridgeControllerTest {
         @Override
         public ApiResult<CoupleState> getCurrentCouple(AuthSession session) {
             calls.add("getCurrentCouple");
+            if (currentCoupleResult != null) {
+                return currentCoupleResult;
+            }
             return ApiResult.success(currentCouple);
         }
 

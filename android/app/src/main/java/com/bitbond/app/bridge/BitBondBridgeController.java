@@ -62,13 +62,13 @@ public final class BitBondBridgeController {
         try {
             ApiResult<AuthSession> sessionResult = auth.ensureSession();
             if (!sessionResult.isSuccess()) {
-                return safeInitialStateJson("Bridge 初始化失败，已切换浏览器预览");
+                return connectedOfflineInitialStateJson();
             }
 
             AuthSession session = sessionResult.value();
             ApiResult<CoupleState> result = pairing.getCurrentCouple(session);
             if (!result.isSuccess()) {
-                return safeInitialStateJson("Bridge 初始化失败，已切换浏览器预览");
+                return connectedOfflineInitialStateJson();
             }
 
             return initialStateJson(result.value()).toString();
@@ -268,6 +268,14 @@ public final class BitBondBridgeController {
             return initialStateJson(false, message, false, "", "未配对").toString();
         } catch (JSONException exception) {
             return "{\"bridge\":{\"ready\":false,\"message\":\"Bridge 初始化失败，已切换浏览器预览\"},\"self\":{\"sharing\":true,\"statusText\":\"你正在共享抽象状态\"},\"pair\":{\"paired\":false,\"nickname\":\"\"},\"partner\":{\"statusCode\":\"offline\",\"updatedAt\":\"未配对\",\"areaLabel\":\"门口\"}}";
+        }
+    }
+
+    private static String connectedOfflineInitialStateJson() {
+        try {
+            return initialStateJson(true, "Android WebView bridge connected", false, "", "未配对").toString();
+        } catch (JSONException exception) {
+            return safeInitialStateJson("Bridge 初始化失败，已切换浏览器预览");
         }
     }
 

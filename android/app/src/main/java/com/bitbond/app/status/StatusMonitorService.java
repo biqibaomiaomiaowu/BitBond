@@ -29,7 +29,7 @@ public final class StatusMonitorService extends Service {
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private StatusMonitorRunner runner;
-    private StatusMonitorScheduler monitorScheduler;
+    private StatusMonitorServiceSchedulerState monitorSchedulerState;
     private StatusMonitorWakeLock monitorWakeLock;
     private StatusMonitorMode monitorMode;
 
@@ -63,11 +63,13 @@ public final class StatusMonitorService extends Service {
         monitorWakeLock = createMonitorWakeLock();
         runner = StatusMonitorDependencies.createRunner(this);
         monitorMode = new StatusMonitorMode(new AccessibilityAccessHelper(this));
-        monitorScheduler = new StatusMonitorScheduler(
-                new AlarmScheduler(this, executor),
-                pollRunnable,
-                POLL_INTERVAL_MS,
-                throwable -> Log.w(TAG, "status monitor poll failed", throwable));
+        StatusMonitorScheduler.Scheduler alarmScheduler = new AlarmScheduler(this, executor);
+        monitorSchedulerState = new StatusMonitorServiceSchedulerState(
+                intervalMillis -> new StatusMonitorScheduler(
+                        alarmScheduler,
+                        pollRunnable,
+                        intervalMillis,
+                        throwable -> Log.w(TAG, "status monitor poll failed", throwable)));
     }
 
     @Override
@@ -85,8 +87,8 @@ public final class StatusMonitorService extends Service {
     @Override
     public void onDestroy() {
         Log.d(TAG, "status monitor destroy");
-        if (monitorScheduler != null) {
-            monitorScheduler.stop();
+        if (monitorSchedulerState != null) {
+            monitorSchedulerState.stop();
         }
         releaseMonitorWakeLock();
         executor.shutdownNow();
@@ -94,9 +96,16 @@ public final class StatusMonitorService extends Service {
     }
 
     void scheduleNextPoll() {
-        if (monitorScheduler != null) {
-            monitorScheduler.start();
+        if (monitorSchedulerState != null) {
+            monitorSchedulerState.start(schedulerIntervalMillis(monitorMode));
         }
+    }
+
+    static long schedulerIntervalMillis(StatusMonitorMode monitorMode) {
+        if (monitorMode == null) {
+            return POLL_INTERVAL_MS;
+        }
+        return monitorMode.usageStatsPollIntervalMillis();
     }
 
     private StatusMonitorWakeLock createMonitorWakeLock() {
@@ -268,6 +277,39 @@ public final class StatusMonitorService extends Service {
         NotificationManager manager = getSystemService(NotificationManager.class);
         if (manager != null) {
             manager.createNotificationChannel(channel);
+        }
+    }
+}
+
+final class StatusMonitorServiceSchedulerState {
+    interface Factory {
+        StatusMonitorScheduler create(long intervalMillis);
+    }
+
+    private final Factory factory;
+    private StatusMonitorScheduler scheduler;
+    private long currentIntervalMillis = Long.MIN_VALUE;
+
+    StatusMonitorServiceSchedulerState(Factory factory) {
+        this.factory = Objects.requireNonNull(factory, "factory");
+    }
+
+    synchronized void start(long intervalMillis) {
+        if (scheduler == null || currentIntervalMillis != intervalMillis) {
+            if (scheduler != null) {
+                scheduler.stop();
+            }
+            scheduler = factory.create(intervalMillis);
+            currentIntervalMillis = intervalMillis;
+        }
+        scheduler.start();
+    }
+
+    synchronized void stop() {
+        if (scheduler != null) {
+            scheduler.stop();
+            scheduler = null;
+            currentIntervalMillis = Long.MIN_VALUE;
         }
     }
 }

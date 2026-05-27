@@ -3,6 +3,8 @@ package com.bitbond.app.status;
 import java.util.Objects;
 
 final class StatusMonitorMode {
+    static final long ACCESSIBILITY_FALLBACK_POLL_INTERVAL_MS = 120_000L;
+
     private final AccessibilityAccessGateway accessibilityAccess;
 
     StatusMonitorMode(AccessibilityAccessGateway accessibilityAccess) {
@@ -18,6 +20,13 @@ final class StatusMonitorMode {
     }
 
     boolean shouldPollUsageStats() {
-        return !isAccessibilityEventMode();
+        return true;
+    }
+
+    long usageStatsPollIntervalMillis() {
+        if (isAccessibilityEventMode()) {
+            return ACCESSIBILITY_FALLBACK_POLL_INTERVAL_MS;
+        }
+        return StatusMonitorService.POLL_INTERVAL_MS;
     }
 }

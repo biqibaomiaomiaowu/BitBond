@@ -18,6 +18,7 @@ public final class StatusMonitorRunner {
     private static final long FOREGROUND_LOOKBACK_MILLIS = Duration.ofHours(2).toMillis();
     private static final long FOREGROUND_CACHE_MAX_AGE_MILLIS = Duration.ofHours(2).toMillis();
     private static final Duration DEDUPLICATION_WINDOW = Duration.ofMinutes(15);
+    private static final Object UPLOAD_LOCK = new Object();
 
     private final boolean supabaseConfigured;
     private final AuthGateway authGateway;
@@ -165,7 +166,7 @@ public final class StatusMonitorRunner {
                 return;
             }
 
-            uploadDetectedForeground(foregroundRecord, detectedAt, true);
+            uploadDetectedForeground(foregroundRecord, detectedAt, UploadPath.POLL);
         } catch (RuntimeException exception) {
             logWarn("status poll crashed", exception);
             // Background sync is best-effort and must never crash the process.
@@ -185,7 +186,7 @@ public final class StatusMonitorRunner {
                 return;
             }
 
-            uploadDetectedForeground(foregroundRecord, detectedAt, false);
+            uploadDetectedForeground(foregroundRecord, detectedAt, UploadPath.EVENT);
         } catch (RuntimeException exception) {
             logWarn("status event upload crashed", exception);
             // Background sync is best-effort and must never crash the process.
@@ -220,18 +221,22 @@ public final class StatusMonitorRunner {
         if (backgroundRefreshPolicy == null) {
             return true;
         }
-        String lastRefreshForegroundKey = readLastRefreshForegroundKey();
-        if (lastRefreshForegroundKey == null || !foregroundKey.equals(lastRefreshForegroundKey)) {
+
+        String persistedForegroundKey = readPersistedLastRefreshForegroundKey();
+        if (persistedForegroundKey != null) {
+            if (!foregroundKey.equals(persistedForegroundKey)) {
+                return true;
+            }
+            return shouldRunBackgroundRefreshSince(readPersistedLastRefreshAt(), detectedAt);
+        }
+
+        if (lastUploadedForegroundKey == null || !foregroundKey.equals(lastUploadedForegroundKey)) {
             return true;
         }
+        return shouldRunBackgroundRefreshSince(lastUploadedAt, detectedAt);
+    }
 
-        Instant lastRefreshAt = null;
-        try {
-            lastRefreshAt = lastRefreshAtReader.get();
-        } catch (RuntimeException exception) {
-            logWarn("status poll last refresh read failed", exception);
-        }
-
+    private boolean shouldRunBackgroundRefreshSince(Instant lastRefreshAt, Instant detectedAt) {
         boolean shouldRefresh = backgroundRefreshPolicy.shouldRefresh(
                 supabaseConfigured,
                 true,
@@ -256,59 +261,43 @@ public final class StatusMonitorRunner {
     private void uploadDetectedForeground(
             LastForegroundStore.Entry foregroundRecord,
             Instant detectedAt,
-            boolean recordBackgroundRefresh) {
+            UploadPath uploadPath) {
         String statusCode = foregroundRecord.statusCode();
         String foregroundKey = foregroundKey(foregroundRecord.packageName(), statusCode);
-        logDebug("status poll detected package=" + safeLogValue(foregroundRecord.packageName())
-                + " status=" + statusCode
-                + " key=" + foregroundKey);
-        if (isDuplicateWithinWindow(foregroundKey, detectedAt)) {
-            logDebug("status poll skipped: duplicate within window key=" + foregroundKey);
-            return;
-        }
-        if (recordBackgroundRefresh
-                && !shouldRunBackgroundRefresh(foregroundKey, detectedAt)) {
-            return;
-        }
+        synchronized (UPLOAD_LOCK) {
+            logDebug("status poll detected package=" + safeLogValue(foregroundRecord.packageName())
+                    + " status=" + statusCode
+                    + " key=" + foregroundKey);
+            if (isDuplicateWithinWindow(foregroundKey, detectedAt)
+                    || isSharedDuplicateWithinWindow(foregroundKey, detectedAt)) {
+                logDebug("status poll skipped: duplicate within window key=" + foregroundKey);
+                return;
+            }
+            if (uploadPath == UploadPath.POLL
+                    && !shouldRunBackgroundRefresh(foregroundKey, detectedAt)) {
+                return;
+            }
 
-        ApiResult<AuthSession> sessionResult = authGateway.ensureSession();
-        if (sessionResult.isSuccess()) {
-            ApiResult<?> uploadResult = statusUploader.uploadCurrentStatus(
-                    sessionResult.value(),
-                    statusCode,
-                    detectedAt);
-            if (uploadResult.isSuccess()) {
-                lastUploadedForegroundKey = foregroundKey;
-                lastUploadedAt = detectedAt;
-                if (recordBackgroundRefresh) {
+            ApiResult<AuthSession> sessionResult = authGateway.ensureSession();
+            if (sessionResult.isSuccess()) {
+                ApiResult<?> uploadResult = statusUploader.uploadCurrentStatus(
+                        sessionResult.value(),
+                        statusCode,
+                        detectedAt);
+                if (uploadResult.isSuccess()) {
+                    lastUploadedForegroundKey = foregroundKey;
+                    lastUploadedAt = detectedAt;
                     writeLastRefreshAt(detectedAt);
                     writeLastRefreshForegroundKey(foregroundKey);
+                    logDebug("status upload success status=" + statusCode + " key=" + foregroundKey);
+                } else {
+                    logWarn("status upload failed code=" + uploadResult.error().code()
+                            + " message=" + uploadResult.error().message());
                 }
-                logDebug("status upload success status=" + statusCode + " key=" + foregroundKey);
             } else {
-                logWarn("status upload failed code=" + uploadResult.error().code()
-                        + " message=" + uploadResult.error().message());
+                logWarn("status auth failed code=" + sessionResult.error().code()
+                        + " message=" + sessionResult.error().message());
             }
-        } else {
-            logWarn("status auth failed code=" + sessionResult.error().code()
-                    + " message=" + sessionResult.error().message());
-        }
-    }
-
-    private String readLastRefreshForegroundKey() {
-        if (lastUploadedForegroundKey != null) {
-            return lastUploadedForegroundKey;
-        }
-
-        try {
-            String foregroundKey = lastRefreshForegroundKeyReader.get();
-            if (foregroundKey == null || foregroundKey.trim().isEmpty()) {
-                return null;
-            }
-            return foregroundKey.trim();
-        } catch (RuntimeException exception) {
-            logWarn("status poll last refresh foreground key read failed", exception);
-            return null;
         }
     }
 
@@ -344,12 +333,53 @@ public final class StatusMonitorRunner {
         return Duration.between(lastUploadedAt, detectedAt).compareTo(DEDUPLICATION_WINDOW) < 0;
     }
 
+    private boolean isSharedDuplicateWithinWindow(String foregroundKey, Instant detectedAt) {
+        String lastRefreshForegroundKey = readPersistedLastRefreshForegroundKey();
+        if (lastRefreshForegroundKey == null || !foregroundKey.equals(lastRefreshForegroundKey)) {
+            return false;
+        }
+
+        Instant lastRefreshAt = readPersistedLastRefreshAt();
+        if (lastRefreshAt == null) {
+            return false;
+        }
+
+        return Duration.between(lastRefreshAt, detectedAt).compareTo(DEDUPLICATION_WINDOW) < 0;
+    }
+
+    private String readPersistedLastRefreshForegroundKey() {
+        try {
+            String foregroundKey = lastRefreshForegroundKeyReader.get();
+            if (foregroundKey == null || foregroundKey.trim().isEmpty()) {
+                return null;
+            }
+            return foregroundKey.trim();
+        } catch (RuntimeException exception) {
+            logWarn("status poll last refresh foreground key read failed", exception);
+            return null;
+        }
+    }
+
+    private Instant readPersistedLastRefreshAt() {
+        try {
+            return lastRefreshAtReader.get();
+        } catch (RuntimeException exception) {
+            logWarn("status poll last refresh read failed", exception);
+            return null;
+        }
+    }
+
     private static String foregroundKey(String packageName, String statusCode) {
         return packageName.trim() + "|" + statusCode;
     }
 
     private static boolean hasPackageName(String packageName) {
         return packageName != null && !packageName.trim().isEmpty();
+    }
+
+    private enum UploadPath {
+        POLL,
+        EVENT
     }
 
     private static String safeLogValue(String value) {

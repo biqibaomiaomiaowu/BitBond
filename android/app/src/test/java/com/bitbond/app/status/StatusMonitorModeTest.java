@@ -1,6 +1,7 @@
 package com.bitbond.app.status;
 
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
@@ -11,14 +12,16 @@ public class StatusMonitorModeTest {
         StatusMonitorMode mode = new StatusMonitorMode(new FakeAccessibilityAccess(false));
 
         assertTrue(mode.shouldPollUsageStats());
+        assertEquals(StatusMonitorService.POLL_INTERVAL_MS, mode.usageStatsPollIntervalMillis());
         assertFalse(mode.isAccessibilityEventMode());
     }
 
     @Test
-    public void shouldNotPollUsageStatsWhenAccessibilityEventModeIsEnabled() {
+    public void shouldPollUsageStatsWhenAccessibilityEventModeIsEnabled() {
         StatusMonitorMode mode = new StatusMonitorMode(new FakeAccessibilityAccess(true));
 
-        assertFalse(mode.shouldPollUsageStats());
+        assertTrue(mode.shouldPollUsageStats());
+        assertEquals(120_000L, mode.usageStatsPollIntervalMillis());
         assertTrue(mode.isAccessibilityEventMode());
     }
 
@@ -27,6 +30,7 @@ public class StatusMonitorModeTest {
         StatusMonitorMode mode = new StatusMonitorMode(new ThrowingAccessibilityAccess());
 
         assertTrue(mode.shouldPollUsageStats());
+        assertEquals(StatusMonitorService.POLL_INTERVAL_MS, mode.usageStatsPollIntervalMillis());
         assertFalse(mode.isAccessibilityEventMode());
     }
 

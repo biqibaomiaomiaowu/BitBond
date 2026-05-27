@@ -60,7 +60,7 @@ select pg_temp.assert_eq(
         'users_update_self',
         'avatars_select_all',
         'user_avatar_select_self',
-        'current_status_select_self_or_couple',
+        'current_status_select_self',
         'couples_select_participant',
         'pair_invites_select_creator'
       )
@@ -79,7 +79,7 @@ select pg_temp.assert_eq(
         or (policyname = 'users_update_self' and tablename = 'users' and cmd = 'UPDATE')
         or (policyname = 'avatars_select_all' and tablename = 'avatars' and cmd = 'SELECT')
         or (policyname = 'user_avatar_select_self' and tablename = 'user_avatar' and cmd = 'SELECT')
-        or (policyname = 'current_status_select_self_or_couple' and tablename = 'current_status' and cmd = 'SELECT')
+        or (policyname = 'current_status_select_self' and tablename = 'current_status' and cmd = 'SELECT')
         or (policyname = 'couples_select_participant' and tablename = 'couples' and cmd = 'SELECT')
         or (policyname = 'pair_invites_select_creator' and tablename = 'pair_invites' and cmd = 'SELECT')
       )
@@ -319,8 +319,8 @@ select pg_temp.assert_eq(
 
 select pg_temp.assert_eq(
   (select count(*) from public.current_status),
-  2,
-  'user A can select self and coupled partner current status'
+  1,
+  'user A can select only their own current status'
 );
 
 update public.users

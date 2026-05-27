@@ -3,6 +3,7 @@ package com.bitbond.app.status;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
+import com.bitbond.app.api.ApiError;
 import com.bitbond.app.api.ApiResult;
 import com.bitbond.app.auth.AuthGateway;
 import com.bitbond.app.auth.AuthSession;
@@ -93,7 +94,7 @@ public class StatusMonitorRunnerTest {
     }
 
     @Test
-    public void runOnceUploadsOnlineWhenForegroundPackageIsUnavailable() {
+    public void runOnceDoesNotUploadOnlineWhenForegroundPackageIsUnavailableAndCacheIsEmpty() {
         List<String> calls = new ArrayList<>();
         FakeUsageAccessGateway usageAccess = new FakeUsageAccessGateway(calls, true);
         FakeAuthGateway auth = new FakeAuthGateway(calls);
@@ -103,7 +104,8 @@ public class StatusMonitorRunnerTest {
 
         runner.runOnce();
 
-        assertEquals(List.of("hasUsageAccess", "readForeground", "auth", "upload:online"), calls);
+        assertEquals(List.of("hasUsageAccess", "readForeground"), calls);
+        assertEquals(0, uploader.uploadCount);
     }
 
     @Test
@@ -162,7 +164,7 @@ public class StatusMonitorRunnerTest {
     }
 
     @Test
-    public void runOnceReadsForegroundEventsWithFiveMinuteLookback() {
+    public void runOnceReadsForegroundEventsWithTwoHourLookback() {
         List<String> calls = new ArrayList<>();
         FakeUsageAccessGateway usageAccess = new FakeUsageAccessGateway(calls, true);
         FakeAuthGateway auth = new FakeAuthGateway(calls);
@@ -172,7 +174,7 @@ public class StatusMonitorRunnerTest {
 
         runner.runOnce();
 
-        assertEquals(Duration.ofMinutes(5).toMillis(), foregroundReader.lastLookbackMillis);
+        assertEquals(Duration.ofHours(2).toMillis(), foregroundReader.lastLookbackMillis);
     }
 
     @Test
@@ -230,19 +232,238 @@ public class StatusMonitorRunnerTest {
         assertEquals(
                 List.of(
                         "hasUsageAccess",
-                        "readLastRefreshAt",
                         "readForeground",
                         "auth",
                         "upload:social",
                         "writeLastRefreshAt:2026-05-27T08:00:00Z",
                         "hasUsageAccess",
+                        "readForeground",
                         "readLastRefreshAt",
                         "hasUsageAccess",
-                        "readLastRefreshAt",
                         "readForeground",
+                        "readLastRefreshAt",
                         "auth",
                         "upload:social",
                         "writeLastRefreshAt:2026-05-27T14:00:00Z"),
+                calls);
+    }
+
+    @Test
+    public void runOnceReadsForegroundEvenWhenBackgroundRefreshIsNotDueAndUploadsChangedPackage() {
+        List<String> calls = new ArrayList<>();
+        MutableClock clock = new MutableClock("2026-05-27T08:00:00Z");
+        AtomicReference<Instant> lastRefreshAt = new AtomicReference<>();
+        FakeUsageAccessGateway usageAccess = new FakeUsageAccessGateway(calls, true);
+        FakeAuthGateway auth = new FakeAuthGateway(calls);
+        FakeForegroundReader foregroundReader = new FakeForegroundReader(calls, "com.tencent.mm");
+        FakeStatusUploader uploader = new FakeStatusUploader(calls);
+        StatusMonitorRunner runner = new StatusMonitorRunner(
+                true,
+                auth,
+                usageAccess,
+                foregroundReader,
+                statusMapper(),
+                uploader,
+                clock,
+                new BackgroundRefreshPolicy(Duration.ofHours(6)),
+                () -> {
+                    calls.add("readLastRefreshAt");
+                    return lastRefreshAt.get();
+                },
+                instant -> {
+                    calls.add("writeLastRefreshAt:" + instant);
+                    lastRefreshAt.set(instant);
+                });
+
+        runner.runOnce();
+        foregroundReader.packageName = "com.xingin.xhs";
+        clock.set("2026-05-27T08:01:00Z");
+        runner.runOnce();
+
+        assertEquals(2, uploader.uploadCount);
+        assertEquals(
+                List.of(
+                        "hasUsageAccess",
+                        "readForeground",
+                        "auth",
+                        "upload:social",
+                        "writeLastRefreshAt:2026-05-27T08:00:00Z",
+                        "hasUsageAccess",
+                        "readForeground",
+                        "auth",
+                        "upload:social",
+                        "writeLastRefreshAt:2026-05-27T08:01:00Z"),
+                calls);
+    }
+
+    @Test
+    public void freshRunnerDoesNotBypassBackgroundRefreshForUnchangedCachedForeground() {
+        List<String> calls = new ArrayList<>();
+        AtomicReference<Instant> lastRefreshAt = new AtomicReference<>();
+        AtomicReference<String> lastRefreshForegroundKey = new AtomicReference<>();
+        LastForegroundStore foregroundStore = LastForegroundStore.inMemory();
+        FakeUsageAccessGateway usageAccess = new FakeUsageAccessGateway(calls, true);
+        FakeAuthGateway auth = new FakeAuthGateway(calls);
+        FakeForegroundReader foregroundReader = new FakeForegroundReader(calls, "com.tencent.mm");
+        FakeStatusUploader uploader = new FakeStatusUploader(calls);
+        StatusMonitorRunner firstRunner = policyRunner(
+                calls,
+                auth,
+                usageAccess,
+                foregroundReader,
+                uploader,
+                new MutableClock("2026-05-27T08:00:00Z"),
+                lastRefreshAt,
+                lastRefreshForegroundKey,
+                foregroundStore);
+
+        firstRunner.runOnce();
+
+        StatusMonitorRunner freshRunner = policyRunner(
+                calls,
+                auth,
+                usageAccess,
+                foregroundReader,
+                uploader,
+                new MutableClock("2026-05-27T08:01:00Z"),
+                lastRefreshAt,
+                lastRefreshForegroundKey,
+                foregroundStore);
+        freshRunner.runOnce();
+
+        assertEquals(1, uploader.uploadCount);
+        assertEquals(
+                List.of(
+                        "hasUsageAccess",
+                        "readForeground",
+                        "auth",
+                        "upload:social",
+                        "writeLastRefreshAt:2026-05-27T08:00:00Z",
+                        "hasUsageAccess",
+                        "readForeground",
+                        "readLastRefreshAt"),
+                calls);
+    }
+
+    @Test
+    public void freshRunnerRetriesChangedPackageAfterFailedUploadDespiteCachedDetection() {
+        List<String> calls = new ArrayList<>();
+        AtomicReference<Instant> lastRefreshAt = new AtomicReference<>();
+        AtomicReference<String> lastRefreshForegroundKey = new AtomicReference<>();
+        LastForegroundStore foregroundStore = LastForegroundStore.inMemory();
+        FakeUsageAccessGateway usageAccess = new FakeUsageAccessGateway(calls, true);
+        FakeAuthGateway auth = new FakeAuthGateway(calls);
+        FakeForegroundReader foregroundReader = new FakeForegroundReader(calls, "com.tencent.mm");
+        FakeStatusUploader uploader = new FakeStatusUploader(calls);
+        StatusMonitorRunner firstRunner = policyRunner(
+                calls,
+                auth,
+                usageAccess,
+                foregroundReader,
+                uploader,
+                new MutableClock("2026-05-27T08:00:00Z"),
+                lastRefreshAt,
+                lastRefreshForegroundKey,
+                foregroundStore);
+
+        firstRunner.runOnce();
+        foregroundReader.packageName = "com.xingin.xhs";
+        uploader.failNextUpload();
+
+        StatusMonitorRunner failedChangedPackageRunner = policyRunner(
+                calls,
+                auth,
+                usageAccess,
+                foregroundReader,
+                uploader,
+                new MutableClock("2026-05-27T08:01:00Z"),
+                lastRefreshAt,
+                lastRefreshForegroundKey,
+                foregroundStore);
+        failedChangedPackageRunner.runOnce();
+
+        assertEquals(2, uploader.uploadCount);
+        assertEquals(Instant.parse("2026-05-27T08:00:00Z"), lastRefreshAt.get());
+
+        StatusMonitorRunner retryRunner = policyRunner(
+                calls,
+                auth,
+                usageAccess,
+                foregroundReader,
+                uploader,
+                new MutableClock("2026-05-27T08:02:00Z"),
+                lastRefreshAt,
+                lastRefreshForegroundKey,
+                foregroundStore);
+        retryRunner.runOnce();
+
+        assertEquals(3, uploader.uploadCount);
+        assertEquals(Instant.parse("2026-05-27T08:02:00Z"), lastRefreshAt.get());
+        assertEquals(
+                List.of(
+                        "hasUsageAccess",
+                        "readForeground",
+                        "auth",
+                        "upload:social",
+                        "writeLastRefreshAt:2026-05-27T08:00:00Z",
+                        "hasUsageAccess",
+                        "readForeground",
+                        "auth",
+                        "upload:social",
+                        "hasUsageAccess",
+                        "readForeground",
+                        "auth",
+                        "upload:social",
+                        "writeLastRefreshAt:2026-05-27T08:02:00Z"),
+                calls);
+    }
+
+    @Test
+    public void failedUploadDoesNotPersistRefreshOrDedupState() {
+        List<String> calls = new ArrayList<>();
+        MutableClock clock = new MutableClock("2026-05-27T08:00:00Z");
+        AtomicReference<Instant> lastRefreshAt = new AtomicReference<>();
+        FakeUsageAccessGateway usageAccess = new FakeUsageAccessGateway(calls, true);
+        FakeAuthGateway auth = new FakeAuthGateway(calls);
+        FakeForegroundReader foregroundReader = new FakeForegroundReader(calls, "com.tencent.mm");
+        FakeStatusUploader uploader = new FakeStatusUploader(calls);
+        uploader.failNextUpload();
+        StatusMonitorRunner runner = new StatusMonitorRunner(
+                true,
+                auth,
+                usageAccess,
+                foregroundReader,
+                statusMapper(),
+                uploader,
+                clock,
+                new BackgroundRefreshPolicy(Duration.ofHours(6)),
+                () -> {
+                    calls.add("readLastRefreshAt");
+                    return lastRefreshAt.get();
+                },
+                instant -> {
+                    calls.add("writeLastRefreshAt:" + instant);
+                    lastRefreshAt.set(instant);
+                });
+
+        runner.runOnce();
+        assertEquals(null, lastRefreshAt.get());
+        clock.set("2026-05-27T08:01:00Z");
+        runner.runOnce();
+
+        assertEquals(2, uploader.uploadCount);
+        assertEquals(Instant.parse("2026-05-27T08:01:00Z"), lastRefreshAt.get());
+        assertEquals(
+                List.of(
+                        "hasUsageAccess",
+                        "readForeground",
+                        "auth",
+                        "upload:social",
+                        "hasUsageAccess",
+                        "readForeground",
+                        "auth",
+                        "upload:social",
+                        "writeLastRefreshAt:2026-05-27T08:01:00Z"),
                 calls);
     }
 
@@ -294,6 +515,38 @@ public class StatusMonitorRunnerTest {
                   {"package":"com.xingin.xhs","statusCode":"social"}
                 ]
                 """);
+    }
+
+    private static StatusMonitorRunner policyRunner(
+            List<String> calls,
+            AuthGateway auth,
+            UsageAccessGateway usageAccess,
+            ForegroundAppReader foregroundReader,
+            StatusUploader uploader,
+            Supplier<Instant> clock,
+            AtomicReference<Instant> lastRefreshAt,
+            AtomicReference<String> lastRefreshForegroundKey,
+            LastForegroundStore foregroundStore) {
+        return new StatusMonitorRunner(
+                true,
+                auth,
+                usageAccess,
+                foregroundReader,
+                statusMapper(),
+                uploader,
+                clock,
+                new BackgroundRefreshPolicy(Duration.ofHours(6)),
+                () -> {
+                    calls.add("readLastRefreshAt");
+                    return lastRefreshAt.get();
+                },
+                instant -> {
+                    calls.add("writeLastRefreshAt:" + instant);
+                    lastRefreshAt.set(instant);
+                },
+                foregroundStore,
+                lastRefreshForegroundKey::get,
+                lastRefreshForegroundKey::set);
     }
 
     private static final class FakeUsageAccessGateway implements UsageAccessGateway {
@@ -351,6 +604,7 @@ public class StatusMonitorRunnerTest {
     private static final class FakeStatusUploader implements StatusUploader {
         private final List<String> calls;
         private int uploadCount;
+        private boolean failNextUpload;
 
         private FakeStatusUploader(List<String> calls) {
             this.calls = calls;
@@ -363,11 +617,19 @@ public class StatusMonitorRunnerTest {
                 Instant statusUpdatedAt) {
             calls.add("upload:" + statusCode);
             uploadCount++;
+            if (failNextUpload) {
+                failNextUpload = false;
+                return ApiResult.error(new ApiError("upload_failed", "Upload failed"));
+            }
             return ApiResult.success(new CurrentStatusResult(
                     statusCode,
                     statusUpdatedAt,
                     statusUpdatedAt.plusSeconds(900),
                     "{}"));
+        }
+
+        private void failNextUpload() {
+            failNextUpload = true;
         }
     }
 

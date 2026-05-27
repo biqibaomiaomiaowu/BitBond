@@ -15,7 +15,8 @@ import java.util.function.Supplier;
 
 public final class StatusMonitorRunner {
     private static final String TAG = "BitBondStatus";
-    private static final long FOREGROUND_LOOKBACK_MILLIS = Duration.ofMinutes(5).toMillis();
+    private static final long FOREGROUND_LOOKBACK_MILLIS = Duration.ofHours(2).toMillis();
+    private static final long FOREGROUND_CACHE_MAX_AGE_MILLIS = Duration.ofHours(2).toMillis();
     private static final Duration DEDUPLICATION_WINDOW = Duration.ofMinutes(15);
 
     private final boolean supabaseConfigured;
@@ -28,6 +29,9 @@ public final class StatusMonitorRunner {
     private final BackgroundRefreshPolicy backgroundRefreshPolicy;
     private final Supplier<Instant> lastRefreshAtReader;
     private final Consumer<Instant> lastRefreshAtWriter;
+    private final LastForegroundStore lastForegroundStore;
+    private final Supplier<String> lastRefreshForegroundKeyReader;
+    private final Consumer<String> lastRefreshForegroundKeyWriter;
     private String lastUploadedForegroundKey;
     private Instant lastUploadedAt;
 
@@ -50,7 +54,8 @@ public final class StatusMonitorRunner {
                 null,
                 () -> null,
                 instant -> {
-                });
+                },
+                LastForegroundStore.noOp());
     }
 
     public StatusMonitorRunner(
@@ -64,6 +69,66 @@ public final class StatusMonitorRunner {
             BackgroundRefreshPolicy backgroundRefreshPolicy,
             Supplier<Instant> lastRefreshAtReader,
             Consumer<Instant> lastRefreshAtWriter) {
+        this(
+                supabaseConfigured,
+                authGateway,
+                usageAccessGateway,
+                foregroundAppReader,
+                statusMapper,
+                statusUploader,
+                clock,
+                backgroundRefreshPolicy,
+                lastRefreshAtReader,
+                lastRefreshAtWriter,
+                LastForegroundStore.noOp(),
+                () -> null,
+                foregroundKey -> {
+                });
+    }
+
+    public StatusMonitorRunner(
+            boolean supabaseConfigured,
+            AuthGateway authGateway,
+            UsageAccessGateway usageAccessGateway,
+            ForegroundAppReader foregroundAppReader,
+            StatusMapper statusMapper,
+            StatusUploader statusUploader,
+            Supplier<Instant> clock,
+            BackgroundRefreshPolicy backgroundRefreshPolicy,
+            Supplier<Instant> lastRefreshAtReader,
+            Consumer<Instant> lastRefreshAtWriter,
+            LastForegroundStore lastForegroundStore) {
+        this(
+                supabaseConfigured,
+                authGateway,
+                usageAccessGateway,
+                foregroundAppReader,
+                statusMapper,
+                statusUploader,
+                clock,
+                backgroundRefreshPolicy,
+                lastRefreshAtReader,
+                lastRefreshAtWriter,
+                lastForegroundStore,
+                () -> null,
+                foregroundKey -> {
+                });
+    }
+
+    public StatusMonitorRunner(
+            boolean supabaseConfigured,
+            AuthGateway authGateway,
+            UsageAccessGateway usageAccessGateway,
+            ForegroundAppReader foregroundAppReader,
+            StatusMapper statusMapper,
+            StatusUploader statusUploader,
+            Supplier<Instant> clock,
+            BackgroundRefreshPolicy backgroundRefreshPolicy,
+            Supplier<Instant> lastRefreshAtReader,
+            Consumer<Instant> lastRefreshAtWriter,
+            LastForegroundStore lastForegroundStore,
+            Supplier<String> lastRefreshForegroundKeyReader,
+            Consumer<String> lastRefreshForegroundKeyWriter) {
         this.supabaseConfigured = supabaseConfigured;
         this.authGateway = Objects.requireNonNull(authGateway, "authGateway");
         this.usageAccessGateway = Objects.requireNonNull(usageAccessGateway, "usageAccessGateway");
@@ -74,6 +139,13 @@ public final class StatusMonitorRunner {
         this.backgroundRefreshPolicy = backgroundRefreshPolicy;
         this.lastRefreshAtReader = Objects.requireNonNull(lastRefreshAtReader, "lastRefreshAtReader");
         this.lastRefreshAtWriter = Objects.requireNonNull(lastRefreshAtWriter, "lastRefreshAtWriter");
+        this.lastForegroundStore = Objects.requireNonNull(lastForegroundStore, "lastForegroundStore");
+        this.lastRefreshForegroundKeyReader = Objects.requireNonNull(
+                lastRefreshForegroundKeyReader,
+                "lastRefreshForegroundKeyReader");
+        this.lastRefreshForegroundKeyWriter = Objects.requireNonNull(
+                lastRefreshForegroundKeyWriter,
+                "lastRefreshForegroundKeyWriter");
     }
 
     public void runOnce() {
@@ -83,12 +155,17 @@ public final class StatusMonitorRunner {
             }
 
             Instant detectedAt = Objects.requireNonNull(clock.get(), "clock instant");
-            if (!shouldRunBackgroundRefresh(detectedAt)) {
+            String packageName = foregroundAppReader.readMostRecentForegroundPackage(FOREGROUND_LOOKBACK_MILLIS);
+            LastForegroundStore.Entry foregroundRecord = foregroundRecordForPackage(packageName, detectedAt);
+            if (foregroundRecord == null) {
+                foregroundRecord = lastForegroundStore.readFresh(FOREGROUND_CACHE_MAX_AGE_MILLIS, detectedAt);
+            }
+            if (foregroundRecord == null) {
+                logDebug("status poll skipped: foreground unavailable and cache empty");
                 return;
             }
 
-            String packageName = foregroundAppReader.readMostRecentForegroundPackage(FOREGROUND_LOOKBACK_MILLIS);
-            uploadDetectedPackage(packageName, detectedAt, true);
+            uploadDetectedForeground(foregroundRecord, detectedAt, true);
         } catch (RuntimeException exception) {
             logWarn("status poll crashed", exception);
             // Background sync is best-effort and must never crash the process.
@@ -101,10 +178,14 @@ public final class StatusMonitorRunner {
                 return;
             }
 
-            uploadDetectedPackage(
-                    packageName,
-                    Objects.requireNonNull(clock.get(), "clock instant"),
-                    false);
+            Instant detectedAt = Objects.requireNonNull(clock.get(), "clock instant");
+            LastForegroundStore.Entry foregroundRecord = foregroundRecordForPackage(packageName, detectedAt);
+            if (foregroundRecord == null) {
+                logDebug("status event skipped: foreground package unavailable");
+                return;
+            }
+
+            uploadDetectedForeground(foregroundRecord, detectedAt, false);
         } catch (RuntimeException exception) {
             logWarn("status event upload crashed", exception);
             // Background sync is best-effort and must never crash the process.
@@ -133,8 +214,14 @@ public final class StatusMonitorRunner {
         return true;
     }
 
-    private boolean shouldRunBackgroundRefresh(Instant detectedAt) {
+    private boolean shouldRunBackgroundRefresh(
+            String foregroundKey,
+            Instant detectedAt) {
         if (backgroundRefreshPolicy == null) {
+            return true;
+        }
+        String lastRefreshForegroundKey = readLastRefreshForegroundKey();
+        if (lastRefreshForegroundKey == null || !foregroundKey.equals(lastRefreshForegroundKey)) {
             return true;
         }
 
@@ -156,14 +243,31 @@ public final class StatusMonitorRunner {
         return shouldRefresh;
     }
 
-    private void uploadDetectedPackage(String packageName, Instant detectedAt, boolean recordBackgroundRefresh) {
+    private LastForegroundStore.Entry foregroundRecordForPackage(String packageName, Instant detectedAt) {
+        if (!hasPackageName(packageName)) {
+            return null;
+        }
+
         String statusCode = statusMapper.mapPackageName(packageName);
-        String foregroundKey = foregroundKey(packageName, statusCode);
-        logDebug("status poll detected package=" + safeLogValue(packageName)
+        lastForegroundStore.save(packageName, statusCode, detectedAt);
+        return new LastForegroundStore.Entry(packageName, statusCode, detectedAt);
+    }
+
+    private void uploadDetectedForeground(
+            LastForegroundStore.Entry foregroundRecord,
+            Instant detectedAt,
+            boolean recordBackgroundRefresh) {
+        String statusCode = foregroundRecord.statusCode();
+        String foregroundKey = foregroundKey(foregroundRecord.packageName(), statusCode);
+        logDebug("status poll detected package=" + safeLogValue(foregroundRecord.packageName())
                 + " status=" + statusCode
                 + " key=" + foregroundKey);
         if (isDuplicateWithinWindow(foregroundKey, detectedAt)) {
             logDebug("status poll skipped: duplicate within window key=" + foregroundKey);
+            return;
+        }
+        if (recordBackgroundRefresh
+                && !shouldRunBackgroundRefresh(foregroundKey, detectedAt)) {
             return;
         }
 
@@ -178,6 +282,7 @@ public final class StatusMonitorRunner {
                 lastUploadedAt = detectedAt;
                 if (recordBackgroundRefresh) {
                     writeLastRefreshAt(detectedAt);
+                    writeLastRefreshForegroundKey(foregroundKey);
                 }
                 logDebug("status upload success status=" + statusCode + " key=" + foregroundKey);
             } else {
@@ -187,6 +292,35 @@ public final class StatusMonitorRunner {
         } else {
             logWarn("status auth failed code=" + sessionResult.error().code()
                     + " message=" + sessionResult.error().message());
+        }
+    }
+
+    private String readLastRefreshForegroundKey() {
+        if (lastUploadedForegroundKey != null) {
+            return lastUploadedForegroundKey;
+        }
+
+        try {
+            String foregroundKey = lastRefreshForegroundKeyReader.get();
+            if (foregroundKey == null || foregroundKey.trim().isEmpty()) {
+                return null;
+            }
+            return foregroundKey.trim();
+        } catch (RuntimeException exception) {
+            logWarn("status poll last refresh foreground key read failed", exception);
+            return null;
+        }
+    }
+
+    private void writeLastRefreshForegroundKey(String foregroundKey) {
+        if (backgroundRefreshPolicy == null) {
+            return;
+        }
+
+        try {
+            lastRefreshForegroundKeyWriter.accept(foregroundKey);
+        } catch (RuntimeException exception) {
+            logWarn("status poll last refresh foreground key write failed", exception);
         }
     }
 
@@ -211,11 +345,11 @@ public final class StatusMonitorRunner {
     }
 
     private static String foregroundKey(String packageName, String statusCode) {
-        if (packageName == null || packageName.trim().isEmpty()) {
-            return statusCode;
-        }
+        return packageName.trim() + "|" + statusCode;
+    }
 
-        return packageName.trim();
+    private static boolean hasPackageName(String packageName) {
+        return packageName != null && !packageName.trim().isEmpty();
     }
 
     private static String safeLogValue(String value) {

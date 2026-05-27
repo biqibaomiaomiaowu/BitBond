@@ -10,7 +10,8 @@ import java.util.Objects;
 import java.util.function.Supplier;
 
 public final class StatusUploadCoordinator implements StatusUploadTrigger {
-    private static final long FOREGROUND_LOOKBACK_MILLIS = Duration.ofMinutes(5).toMillis();
+    private static final long FOREGROUND_LOOKBACK_MILLIS = Duration.ofHours(2).toMillis();
+    private static final long FOREGROUND_CACHE_MAX_AGE_MILLIS = Duration.ofHours(2).toMillis();
     private static final Duration DEDUPLICATION_WINDOW = Duration.ofMinutes(15);
 
     private final UsageAccessGateway usageAccessGateway;
@@ -18,6 +19,7 @@ public final class StatusUploadCoordinator implements StatusUploadTrigger {
     private final StatusMapper statusMapper;
     private final StatusUploader statusUploader;
     private final Supplier<Instant> clock;
+    private final LastForegroundStore lastForegroundStore;
 
     private String lastUploadedForegroundKey;
     private Instant lastUploadedAt;
@@ -28,11 +30,28 @@ public final class StatusUploadCoordinator implements StatusUploadTrigger {
             StatusMapper statusMapper,
             StatusUploader statusUploader,
             Supplier<Instant> clock) {
+        this(
+                usageAccessGateway,
+                foregroundAppReader,
+                statusMapper,
+                statusUploader,
+                clock,
+                LastForegroundStore.noOp());
+    }
+
+    public StatusUploadCoordinator(
+            UsageAccessGateway usageAccessGateway,
+            ForegroundAppReader foregroundAppReader,
+            StatusMapper statusMapper,
+            StatusUploader statusUploader,
+            Supplier<Instant> clock,
+            LastForegroundStore lastForegroundStore) {
         this.usageAccessGateway = Objects.requireNonNull(usageAccessGateway, "usageAccessGateway");
         this.foregroundAppReader = Objects.requireNonNull(foregroundAppReader, "foregroundAppReader");
         this.statusMapper = Objects.requireNonNull(statusMapper, "statusMapper");
         this.statusUploader = Objects.requireNonNull(statusUploader, "statusUploader");
         this.clock = Objects.requireNonNull(clock, "clock");
+        this.lastForegroundStore = Objects.requireNonNull(lastForegroundStore, "lastForegroundStore");
     }
 
     @Override
@@ -45,8 +64,16 @@ public final class StatusUploadCoordinator implements StatusUploadTrigger {
 
         Instant detectedAt = Objects.requireNonNull(clock.get(), "clock instant");
         String packageName = foregroundAppReader.readMostRecentForegroundPackage(FOREGROUND_LOOKBACK_MILLIS);
-        String statusCode = statusMapper.mapPackageName(packageName);
-        String foregroundKey = foregroundKey(packageName, statusCode);
+        LastForegroundStore.Entry foregroundRecord = foregroundRecordForPackage(packageName, detectedAt);
+        if (foregroundRecord == null) {
+            foregroundRecord = lastForegroundStore.readFresh(FOREGROUND_CACHE_MAX_AGE_MILLIS, detectedAt);
+        }
+        if (foregroundRecord == null) {
+            return ApiResult.success("skipped");
+        }
+
+        String statusCode = foregroundRecord.statusCode();
+        String foregroundKey = foregroundKey(foregroundRecord.packageName(), statusCode);
 
         if (isDuplicateWithinWindow(foregroundKey, detectedAt)) {
             return ApiResult.success("deduplicated");
@@ -62,6 +89,16 @@ public final class StatusUploadCoordinator implements StatusUploadTrigger {
         return ApiResult.success(statusCode);
     }
 
+    private LastForegroundStore.Entry foregroundRecordForPackage(String packageName, Instant detectedAt) {
+        if (!hasPackageName(packageName)) {
+            return null;
+        }
+
+        String statusCode = statusMapper.mapPackageName(packageName);
+        lastForegroundStore.save(packageName, statusCode, detectedAt);
+        return new LastForegroundStore.Entry(packageName, statusCode, detectedAt);
+    }
+
     private boolean isDuplicateWithinWindow(String foregroundKey, Instant detectedAt) {
         if (!foregroundKey.equals(lastUploadedForegroundKey) || lastUploadedAt == null) {
             return false;
@@ -71,10 +108,10 @@ public final class StatusUploadCoordinator implements StatusUploadTrigger {
     }
 
     private static String foregroundKey(String packageName, String statusCode) {
-        if (packageName == null || packageName.trim().isEmpty()) {
-            return statusCode;
-        }
+        return packageName.trim() + "|" + statusCode;
+    }
 
-        return packageName.trim();
+    private static boolean hasPackageName(String packageName) {
+        return packageName != null && !packageName.trim().isEmpty();
     }
 }

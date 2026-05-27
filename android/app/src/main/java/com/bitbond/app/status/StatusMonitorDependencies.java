@@ -29,7 +29,9 @@ import java.time.Instant;
 public final class StatusMonitorDependencies {
     private static final String AUTH_PREFS_NAME = "bitbond_auth";
     private static final String BACKGROUND_REFRESH_PREFS_NAME = "bitbond_background_refresh";
+    private static final String LAST_FOREGROUND_PREFS_NAME = "bitbond_last_foreground";
     private static final String KEY_LAST_REFRESH_AT_EPOCH_MILLIS = "last_refresh_at_epoch_millis";
+    private static final String KEY_LAST_REFRESH_FOREGROUND_KEY = "last_refresh_foreground_key";
     private static final Duration BACKGROUND_REFRESH_MINIMUM_INTERVAL = Duration.ofHours(6);
 
     private StatusMonitorDependencies() {
@@ -71,6 +73,8 @@ public final class StatusMonitorDependencies {
         SharedPreferences backgroundRefreshPreferences = serviceContext.getSharedPreferences(
                 BACKGROUND_REFRESH_PREFS_NAME,
                 Context.MODE_PRIVATE);
+        LastForegroundStore lastForegroundStore = new LastForegroundStore.SharedPreferencesLastForegroundStore(
+                serviceContext.getSharedPreferences(LAST_FOREGROUND_PREFS_NAME, Context.MODE_PRIVATE));
 
         return new StatusMonitorRunner(
                 true,
@@ -82,7 +86,10 @@ public final class StatusMonitorDependencies {
                 Instant::now,
                 new BackgroundRefreshPolicy(BACKGROUND_REFRESH_MINIMUM_INTERVAL),
                 () -> readLastRefreshAt(backgroundRefreshPreferences),
-                instant -> writeLastRefreshAt(backgroundRefreshPreferences, instant));
+                instant -> writeLastRefreshAt(backgroundRefreshPreferences, instant),
+                lastForegroundStore,
+                () -> readLastRefreshForegroundKey(backgroundRefreshPreferences),
+                foregroundKey -> writeLastRefreshForegroundKey(backgroundRefreshPreferences, foregroundKey));
     }
 
     private static StatusMapper loadStatusMapper(Context context) {
@@ -121,6 +128,20 @@ public final class StatusMonitorDependencies {
     private static void writeLastRefreshAt(SharedPreferences preferences, Instant lastRefreshAt) {
         preferences.edit()
                 .putLong(KEY_LAST_REFRESH_AT_EPOCH_MILLIS, lastRefreshAt.toEpochMilli())
+                .apply();
+    }
+
+    private static String readLastRefreshForegroundKey(SharedPreferences preferences) {
+        String foregroundKey = preferences.getString(KEY_LAST_REFRESH_FOREGROUND_KEY, "");
+        if (foregroundKey == null || foregroundKey.trim().isEmpty()) {
+            return null;
+        }
+        return foregroundKey.trim();
+    }
+
+    private static void writeLastRefreshForegroundKey(SharedPreferences preferences, String foregroundKey) {
+        preferences.edit()
+                .putString(KEY_LAST_REFRESH_FOREGROUND_KEY, foregroundKey)
                 .apply();
     }
 

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <exclude
+        domain="sharedpref"
+        path="bitbond_last_foreground.xml" />
+    <exclude
+        domain="sharedpref"
+        path="bitbond_background_refresh.xml" />
+</full-backup-content>

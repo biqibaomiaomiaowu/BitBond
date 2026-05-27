@@ -41,6 +41,7 @@ import com.bitbond.app.sharing.SharingRepository;
 import com.bitbond.app.status.DebugForegroundGateway;
 import com.bitbond.app.status.DebugForegroundService;
 import com.bitbond.app.status.ForegroundAppReader;
+import com.bitbond.app.status.LastForegroundStore;
 import com.bitbond.app.status.AccessibilityAccessGateway;
 import com.bitbond.app.status.AccessibilityAccessHelper;
 import com.bitbond.app.status.BatteryOptimizationGateway;
@@ -78,6 +79,7 @@ public class MainActivity extends Activity {
     private static final int NETWORK_TIMEOUT_MS = 10000;
     private static final int POST_NOTIFICATIONS_REQUEST_CODE = 2401;
     public static final String AUTH_PREFS_NAME = "bitbond_auth";
+    private static final String LAST_FOREGROUND_PREFS_NAME = "bitbond_last_foreground";
     private static final String AUTH_PREF_ACCESS_TOKEN = "access_token";
     private static final String AUTH_PREF_REFRESH_TOKEN = "refresh_token";
     private static final String AUTH_PREF_EXPIRES_AT = "expires_at";
@@ -229,12 +231,15 @@ public class MainActivity extends Activity {
             AccountRepository accountRepository = new AccountRepository(rpcClient);
             AnalyticsRepository analyticsRepository = new AnalyticsRepository(rpcClient);
             StatusMapper statusMapper = loadStatusMapper();
+            LastForegroundStore lastForegroundStore = new LastForegroundStore.SharedPreferencesLastForegroundStore(
+                    getSharedPreferences(LAST_FOREGROUND_PREFS_NAME, MODE_PRIVATE));
             StatusUploadCoordinator statusUploadCoordinator = new StatusUploadCoordinator(
                     usageAccessGateway,
                     foregroundAppReader,
                     statusMapper,
                     statusRepository,
-                    Instant::now);
+                    Instant::now,
+                    lastForegroundStore);
             authGateway = serialAuthGateway(persistingAuthGateway(
                     authRepository,
                     sessionStore,

@@ -8,7 +8,7 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 public final class DebugForegroundService implements DebugForegroundGateway {
-    private static final long DEFAULT_LOOKBACK_MILLIS = 60_000L;
+    private static final long DEFAULT_LOOKBACK_MILLIS = 2 * 60 * 60 * 1000L;
 
     private final boolean enabled;
     private final ForegroundAppReader foregroundAppReader;

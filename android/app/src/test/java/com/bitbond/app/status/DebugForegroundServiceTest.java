@@ -5,6 +5,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.json.JSONObject;
 import org.junit.Test;
@@ -30,6 +31,21 @@ public class DebugForegroundServiceTest {
         assertTrue(result.getBoolean("enabled"));
         assertEquals("ok", result.getString("code"));
         assertEquals("com.tencent.mm", result.getString("packageName"));
+    }
+
+    @Test
+    public void enabledDebugUsesTwoHourDefaultLookback() throws Exception {
+        AtomicLong capturedLookbackMillis = new AtomicLong();
+        DebugForegroundService service = new DebugForegroundService(
+                true,
+                lookbackMillis -> {
+                    capturedLookbackMillis.set(lookbackMillis);
+                    return "com.tencent.mm";
+                });
+
+        service.debugForegroundApp();
+
+        assertEquals(2 * 60 * 60 * 1000L, capturedLookbackMillis.get());
     }
 
     @Test

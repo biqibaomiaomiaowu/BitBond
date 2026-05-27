@@ -57,7 +57,10 @@ public interface ForegroundAppReader {
                     if (isForegroundEvent(event)) {
                         selectedEvent = selectMoreRecentForegroundEvent(
                                 selectedEvent,
-                                new ForegroundEventSnapshot(event.getPackageName(), event.getTimeStamp()),
+                                new ForegroundEventSnapshot(
+                                        event.getPackageName(),
+                                        event.getTimeStamp(),
+                                        event.getEventType()),
                                 ownPackageName);
                     }
                 }
@@ -91,10 +94,13 @@ public interface ForegroundAppReader {
             if (candidateEvent == null || !isSelectablePackage(candidateEvent.packageName, ownPackageName)) {
                 return selectedEvent;
             }
-            if (selectedEvent == null || candidateEvent.timestamp >= selectedEvent.timestamp) {
+            if (selectedEvent == null || candidateEvent.timestamp > selectedEvent.timestamp) {
                 return candidateEvent;
             }
-            return selectedEvent;
+            if (candidateEvent.timestamp < selectedEvent.timestamp) {
+                return selectedEvent;
+            }
+            return candidateEvent;
         }
 
         private static boolean isForegroundEvent(UsageEvents.Event event) {
@@ -104,10 +110,7 @@ public interface ForegroundAppReader {
         }
 
         private static boolean isSelectablePackage(String packageName, String ownPackageName) {
-            if (packageName == null || packageName.trim().isEmpty()) {
-                return false;
-            }
-            return ownPackageName == null || !ownPackageName.equals(packageName);
+            return ForegroundPackageFilter.isSelectableForegroundPackage(packageName, ownPackageName);
         }
 
         static final class ForegroundEventSnapshot {
@@ -117,6 +120,10 @@ public interface ForegroundAppReader {
             ForegroundEventSnapshot(String packageName, long timestamp) {
                 this.packageName = packageName;
                 this.timestamp = timestamp;
+            }
+
+            ForegroundEventSnapshot(String packageName, long timestamp, int eventType) {
+                this(packageName, timestamp);
             }
         }
     }

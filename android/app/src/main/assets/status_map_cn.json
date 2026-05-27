@@ -4,7 +4,19 @@
     "statusCode": "short_video"
   },
   {
+    "package": "com.zhiliaoapp.musically",
+    "statusCode": "short_video"
+  },
+  {
+    "package": "com.ss.android.ugc.trill",
+    "statusCode": "short_video"
+  },
+  {
     "package": "com.kuaishou.nebula",
+    "statusCode": "short_video"
+  },
+  {
+    "package": "com.smile.gifmaker",
     "statusCode": "short_video"
   },
   {
@@ -16,11 +28,31 @@
     "statusCode": "watching_show"
   },
   {
+    "package": "com.tencent.qqlivei18n",
+    "statusCode": "watching_show"
+  },
+  {
     "package": "com.youku.phone",
     "statusCode": "watching_show"
   },
   {
+    "package": "com.mgtv.tv",
+    "statusCode": "watching_show"
+  },
+  {
+    "package": "com.sohu.sohuvideo",
+    "statusCode": "watching_show"
+  },
+  {
     "package": "tv.danmaku.bili",
+    "statusCode": "watching_show"
+  },
+  {
+    "package": "tv.danmaku.bilibilihd",
+    "statusCode": "watching_show"
+  },
+  {
+    "package": "com.bilibili.app.in",
     "statusCode": "watching_show"
   },
   {

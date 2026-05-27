@@ -12,22 +12,35 @@ const {
   applyAcceptInviteResult,
   applyAvatarSelectionResult,
   applyDebugForegroundResult,
+  applyDeleteAccountResult,
+  applyLatestInteractionsResult,
+  applyMarkInteractionsSeenResult,
   applyPairInviteResult,
   applyPartnerStatusResult,
+  applyPauseSharingResult,
+  applyPrivacySettingsResult,
+  applyResumeSharingResult,
   applyUnlinkResult,
   buildAvatarViewModel,
   buildDebugViewModel,
+  buildHomeStatusViewModel,
   buildInitialState,
+  buildInteractionsViewModel,
   buildPairingViewModel,
   buildPermissionViewModel,
+  buildPrivacySettingsUpdatePayload,
+  buildPrivacySettingsViewModel,
   buildSettingsViewModel,
+  buildSharingViewModel,
   createFallbackBridgeState,
   getRoomPresentation,
+  privacyCategoryCodes,
+  sanitizeDebugForeground,
   statusConfigs,
 } = bitbondState;
 
 type NoticeKind = 'idle' | 'success' | 'error';
-type AppView = 'home' | 'pairing' | 'avatar' | 'permission' | 'settings' | 'debug';
+type AppView = 'home' | 'pairing' | 'avatar' | 'permission' | 'settings' | 'info' | 'debug';
 type StatusConfig = {
   code: string;
   label: string;
@@ -65,6 +78,18 @@ type BridgeState = {
     kind: NoticeKind;
     message: string;
   };
+  interactions?: {
+    unreadCount: number;
+    items: Array<{
+      id: string;
+      type: 'heart';
+      createdAt: string;
+      seen: boolean;
+    }>;
+  };
+};
+type PrivacySettings = {
+  enabledCategories: string[];
 };
 type BridgeJsonValue = string | Record<string, unknown> | null | undefined;
 type BitBondBridge = {
@@ -84,6 +109,15 @@ type BitBondBridge = {
   selectAvatar?: (payload: string) => BridgeJsonValue | Promise<BridgeJsonValue>;
   refreshPartnerStatus?: () => BridgeJsonValue | Promise<BridgeJsonValue>;
   uploadCurrentStatus?: () => BridgeJsonValue | Promise<BridgeJsonValue>;
+  pauseSharing?: () => BridgeJsonValue | Promise<BridgeJsonValue>;
+  resumeSharing?: () => BridgeJsonValue | Promise<BridgeJsonValue>;
+  getPrivacySettings?: () => BridgeJsonValue | Promise<BridgeJsonValue>;
+  updatePrivacySettings?: (payload: string) => BridgeJsonValue | Promise<BridgeJsonValue>;
+  sendHeart?: () => BridgeJsonValue | Promise<BridgeJsonValue>;
+  getLatestInteractions?: () => BridgeJsonValue | Promise<BridgeJsonValue>;
+  markInteractionsSeen?: (payload: string) => BridgeJsonValue | Promise<BridgeJsonValue>;
+  deleteAccount?: (payload: string) => BridgeJsonValue | Promise<BridgeJsonValue>;
+  recordAnalyticsEvent?: (payload: string) => BridgeJsonValue | Promise<BridgeJsonValue>;
 };
 type BridgeCallableName = Exclude<keyof BitBondBridge, 'ping' | 'getInitialState'>;
 type RoomMotion = {
@@ -105,6 +139,7 @@ const navItems: Array<{ id: AppView; label: string }> = [
   { id: 'avatar', label: '头像' },
   { id: 'permission', label: '权限' },
   { id: 'settings', label: '设置' },
+  { id: 'info', label: '说明' },
   { id: 'debug', label: '调试' },
 ];
 const viewTitles: Record<AppView, string> = {
@@ -113,6 +148,7 @@ const viewTitles: Record<AppView, string> = {
   avatar: '头像',
   permission: '使用权限',
   settings: '设置',
+  info: '隐私说明',
   debug: '调试',
 };
 const assetPaths = {
@@ -129,11 +165,15 @@ const statusAccess = ref({
   hasAccessibilityAccess: false,
   isIgnoringBatteryOptimizations: false,
 });
+const privacySettings = ref<PrivacySettings>({
+  enabledCategories: [...(privacyCategoryCodes as string[])],
+});
 const bridgeAvatars = ref<Array<Record<string, unknown>>>([]);
 const debugForeground = ref<Record<string, unknown>>({ enabled: false });
 const acceptCode = shallowRef('');
 const localMessage = shallowRef('');
 const unlinkStep = shallowRef<'idle' | 'confirm' | 'done'>('idle');
+const deleteAccountStep = shallowRef<'idle' | 'confirm' | 'done'>('idle');
 const roomMotion = ref<RoomMotion>({
   statusCode: state.value.partner.statusCode,
   phase: 'action',
@@ -145,8 +185,13 @@ const uploading = shallowRef(false);
 const pairingBusy = shallowRef<'idle' | 'create' | 'accept'>('idle');
 const avatarBusy = shallowRef<'idle' | 'list' | 'select'>('idle');
 const permissionBusy = shallowRef<'idle' | 'check' | 'open-usage' | 'open-accessibility' | 'open-battery'>('idle');
+const privacyBusy = shallowRef<'idle' | 'load' | 'update'>('idle');
 const debugBusy = shallowRef(false);
 const unlinking = shallowRef(false);
+const sharingBusy = shallowRef(false);
+const heartBusy = shallowRef(false);
+const interactionsBusy = shallowRef<'idle' | 'load' | 'mark'>('idle');
+const deletingAccount = shallowRef(false);
 let roomMotionTimer: number | undefined;
 let partnerStatusAutoRefresh:
   | {
@@ -174,6 +219,10 @@ const avatarViewModel = computed(() =>
   }),
 );
 const settingsViewModel = computed(() => buildSettingsViewModel(state.value));
+const sharingViewModel = computed(() => buildSharingViewModel(state.value));
+const privacySettingsViewModel = computed(() => buildPrivacySettingsViewModel(privacySettings.value));
+const interactionsViewModel = computed(() => buildInteractionsViewModel(state.value));
+const homeStatusViewModel = computed(() => buildHomeStatusViewModel(state.value));
 const debugViewModel = computed(() => buildDebugViewModel(debugForeground.value));
 const partnerName = computed(() => pairingViewModel.value.partnerName);
 const selectedAvatarName = computed(() => {
@@ -206,6 +255,8 @@ onMounted(async () => {
   autoRefresh.attach();
   void checkStatusAccess({ silent: true });
   void listAvatars({ silent: true });
+  void loadPrivacySettings({ silent: true });
+  void loadLatestInteractions({ silent: true });
 });
 
 onUnmounted(() => {
@@ -318,6 +369,12 @@ function setActiveView(view: AppView) {
   localMessage.value = '';
   if (view !== 'settings') {
     unlinkStep.value = 'idle';
+    deleteAccountStep.value = 'idle';
+  } else {
+    void loadPrivacySettings({ silent: true });
+  }
+  if (view === 'home') {
+    void loadLatestInteractions({ silent: true });
   }
 }
 
@@ -602,6 +659,168 @@ function statusAccessNotice(access: {
   return '还未开启状态刷新权限';
 }
 
+async function pauseSharing() {
+  if (sharingBusy.value || !sharingViewModel.value.isSharing) {
+    return;
+  }
+
+  sharingBusy.value = true;
+  const rawResult = await callBridgeMethod('pauseSharing', {
+    ok: true,
+    data: {
+      sharing: false,
+    },
+  });
+
+  state.value = applyPauseSharingResult(state.value, rawResult);
+  sharingBusy.value = false;
+}
+
+async function resumeSharing() {
+  if (sharingBusy.value || sharingViewModel.value.isSharing) {
+    return;
+  }
+
+  sharingBusy.value = true;
+  const rawResult = await callBridgeMethod('resumeSharing', {
+    ok: true,
+    data: {
+      sharing: true,
+    },
+  });
+
+  state.value = applyResumeSharingResult(state.value, rawResult);
+  sharingBusy.value = false;
+}
+
+async function loadPrivacySettings(options: { silent?: boolean } = {}) {
+  if (privacyBusy.value !== 'idle') {
+    return;
+  }
+
+  privacyBusy.value = 'load';
+  const rawResult = await callBridgeMethod('getPrivacySettings', {
+    ok: true,
+    data: {
+      allowedStatuses: privacySettings.value.enabledCategories,
+    },
+  });
+  const result = applyPrivacySettingsResult(privacySettings.value, rawResult);
+
+  privacySettings.value = result.settings;
+  if (!options.silent || result.notice.kind === 'error') {
+    setNotice(result.notice.kind, result.notice.message);
+  }
+  privacyBusy.value = 'idle';
+}
+
+async function updatePrivacyCategory(categoryCode: string, enabled: boolean) {
+  if (privacyBusy.value !== 'idle') {
+    return;
+  }
+
+  const currentEnabled = new Set(privacySettingsViewModel.value.enabledCategories);
+  if (enabled) {
+    currentEnabled.add(categoryCode);
+  } else {
+    currentEnabled.delete(categoryCode);
+  }
+  const nextEnabledCategories = privacySettingsViewModel.value.categories
+    .map((category: { code: string }) => category.code)
+    .filter((code: string) => currentEnabled.has(code));
+
+  privacyBusy.value = 'update';
+  const payload = buildPrivacySettingsUpdatePayload(nextEnabledCategories, {
+    source: 'bitbond_web_privacy',
+    requestedAt: new Date().toISOString(),
+  });
+  const rawResult = await callBridgeMethod(
+    'updatePrivacySettings',
+    {
+      ok: true,
+      data: {
+        allowedStatuses: nextEnabledCategories,
+      },
+    },
+    payload,
+  );
+  const result = applyPrivacySettingsResult(privacySettings.value, rawResult);
+
+  privacySettings.value = result.settings;
+  setNotice(result.notice.kind, result.notice.message);
+  privacyBusy.value = 'idle';
+}
+
+async function loadLatestInteractions(options: { silent?: boolean } = {}) {
+  if (interactionsBusy.value !== 'idle') {
+    return;
+  }
+
+  interactionsBusy.value = 'load';
+  const rawResult = await callBridgeMethod('getLatestInteractions', {
+    ok: true,
+    data: {
+      interactions: [],
+    },
+  });
+
+  state.value = applyLatestInteractionsResult(state.value, rawResult);
+  if (!options.silent && state.value.notice.kind === 'error') {
+    localMessage.value = state.value.notice.message;
+  }
+  interactionsBusy.value = 'idle';
+}
+
+async function sendHeart() {
+  if (heartBusy.value || !pairingViewModel.value.isPaired) {
+    setNotice('error', '配对后才能发送爱心');
+    return;
+  }
+
+  heartBusy.value = true;
+  const rawResult = await callBridgeMethod('sendHeart', {
+    ok: true,
+    data: {
+      sent: true,
+    },
+  });
+
+  if (bridgeResultOk(rawResult)) {
+    setNotice('success', '爱心已送达');
+    void loadLatestInteractions({ silent: true });
+  } else {
+    setNotice('error', '爱心发送失败，请稍后再试');
+  }
+  heartBusy.value = false;
+}
+
+async function markHeartInteractionsSeen() {
+  if (interactionsBusy.value !== 'idle' || interactionsViewModel.value.unreadInteractionIds.length === 0) {
+    return;
+  }
+
+  interactionsBusy.value = 'mark';
+  const payload = JSON.stringify({
+    interactionIds: interactionsViewModel.value.unreadInteractionIds,
+    seen: true,
+    source: 'bitbond_web_home',
+    requestedAt: new Date().toISOString(),
+  });
+  const rawResult = await callBridgeMethod(
+    'markInteractionsSeen',
+    {
+      ok: true,
+      data: {
+        seen: true,
+      },
+    },
+    payload,
+  );
+
+  state.value = applyMarkInteractionsSeenResult(state.value, rawResult);
+  interactionsBusy.value = 'idle';
+}
+
 async function getDebugForegroundApp() {
   if (debugBusy.value) {
     return;
@@ -615,7 +834,7 @@ async function getDebugForegroundApp() {
     },
   });
 
-  debugForeground.value = readBridgeData(rawResult);
+  debugForeground.value = sanitizeDebugForeground(readBridgeData(rawResult));
   state.value = applyDebugForegroundResult(state.value, rawResult);
   debugBusy.value = false;
 }
@@ -633,6 +852,21 @@ function cancelUnlink() {
     return;
   }
   unlinkStep.value = 'idle';
+}
+
+function requestDeleteAccount() {
+  if (deletingAccount.value) {
+    return;
+  }
+  deleteAccountStep.value = 'confirm';
+  localMessage.value = '';
+}
+
+function cancelDeleteAccount() {
+  if (deletingAccount.value) {
+    return;
+  }
+  deleteAccountStep.value = 'idle';
 }
 
 async function confirmUnlink() {
@@ -661,6 +895,35 @@ async function confirmUnlink() {
   state.value = applyUnlinkResult(state.value, rawResult);
   unlinkStep.value = state.value.notice.kind === 'success' ? 'done' : 'idle';
   unlinking.value = false;
+}
+
+async function confirmDeleteAccount() {
+  if (deletingAccount.value) {
+    return;
+  }
+
+  deletingAccount.value = true;
+  const payload = JSON.stringify({
+    action: 'delete_account',
+    source: 'bitbond_web_settings',
+    confirmed: true,
+    requestedAt: new Date().toISOString(),
+  });
+  const rawResult = await callBridgeMethod(
+    'deleteAccount',
+    {
+      ok: true,
+      data: {
+        deleted: true,
+      },
+    },
+    payload,
+  );
+
+  state.value = applyDeleteAccountResult(state.value, rawResult);
+  deleteAccountStep.value = state.value.notice.kind === 'success' ? 'done' : 'idle';
+  unlinkStep.value = 'idle';
+  deletingAccount.value = false;
 }
 
 function startRoomMotion(statusCode: string, animated: boolean) {
@@ -739,10 +1002,11 @@ function nextPreviewStatusCode() {
             <div class="status-head">
               <div>
                 <p class="section-label">{{ partnerName }}</p>
-                <h2>{{ currentStatus.statusText }}</h2>
+                <h2>{{ homeStatusViewModel.title }}</h2>
               </div>
               <span class="status-chip">{{ currentStatus.label }}</span>
             </div>
+            <p class="empty-note">{{ homeStatusViewModel.message }}</p>
             <dl class="status-list">
               <div>
                 <dt>房间区域</dt>
@@ -770,7 +1034,31 @@ function nextPreviewStatusCode() {
             <button class="secondary-button" type="button" :disabled="uploading" @click="uploadCurrentStatus">
               {{ uploading ? '上传中' : '上传本机' }}
             </button>
+            <button class="heart-button" type="button" :disabled="heartBusy || !pairingViewModel.isPaired" @click="sendHeart">
+              {{ heartBusy ? '发送中' : '送爱心' }}
+            </button>
           </div>
+
+          <section
+            v-if="interactionsViewModel.hasUnreadHeart"
+            class="heart-alert"
+            :data-unread="interactionsViewModel.hasUnreadHeart"
+            aria-live="polite"
+          >
+            <span class="heart-glyph" aria-hidden="true">心</span>
+            <div>
+              <strong>收到一个爱心</strong>
+              <p>对方刚刚向你发来轻量互动。</p>
+            </div>
+            <button
+              class="small-button"
+              type="button"
+              :disabled="interactionsBusy !== 'idle'"
+              @click="markHeartInteractionsSeen"
+            >
+              知道了
+            </button>
+          </section>
         </section>
 
         <section v-else-if="activeView === 'pairing'" key="pairing" class="view-stack">
@@ -913,6 +1201,53 @@ function nextPreviewStatusCode() {
           <section class="panel">
             <div class="section-head">
               <div>
+                <p class="section-label">共享状态</p>
+                <h2>{{ sharingViewModel.title }}</h2>
+              </div>
+              <span class="status-chip">{{ sharingViewModel.isSharing ? '共享中' : '已暂停' }}</span>
+            </div>
+            <p class="body-copy">{{ sharingViewModel.statusText }}</p>
+            <div class="action-grid single-action">
+              <button
+                :class="sharingViewModel.isSharing ? 'secondary-button' : 'primary-button'"
+                type="button"
+                :disabled="sharingBusy"
+                @click="sharingViewModel.isSharing ? pauseSharing() : resumeSharing()"
+              >
+                {{ sharingBusy ? '处理中' : sharingViewModel.primaryAction.label }}
+              </button>
+            </div>
+          </section>
+
+          <section class="panel compact-panel">
+            <div class="section-head">
+              <div>
+                <p class="section-label">隐私类别</p>
+                <h2>选择可以共享的抽象状态</h2>
+              </div>
+              <button class="small-button" type="button" :disabled="privacyBusy !== 'idle'" @click="loadPrivacySettings()">
+                {{ privacyBusy === 'load' ? '刷新中' : '刷新' }}
+              </button>
+            </div>
+            <div class="privacy-list" aria-label="隐私类别开关">
+              <label v-for="category in privacySettingsViewModel.categories" :key="category.code" class="privacy-row">
+                <input
+                  type="checkbox"
+                  :checked="category.enabled"
+                  :disabled="privacyBusy !== 'idle'"
+                  @change="updatePrivacyCategory(category.code, !category.enabled)"
+                />
+                <span>
+                  <strong>{{ category.label }}</strong>
+                  <small>{{ category.statusText }}</small>
+                </span>
+              </label>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="section-head">
+              <div>
                 <p class="section-label">配对管理</p>
                 <h2>{{ settingsViewModel.paired ? `当前与 ${settingsViewModel.partnerName} 配对` : '当前没有配对对象' }}</h2>
               </div>
@@ -933,16 +1268,53 @@ function nextPreviewStatusCode() {
             </div>
           </section>
 
+          <section class="panel">
+            <div class="section-head">
+              <div>
+                <p class="section-label">删除账号</p>
+                <h2>二次确认后清空本机配对状态</h2>
+              </div>
+              <span class="status-chip">危险操作</span>
+            </div>
+            <p class="body-copy">删除会停止本机共享，并把当前房间恢复到未配对状态。</p>
+            <button class="danger-button" type="button" :disabled="deletingAccount" @click="requestDeleteAccount">
+              {{ deletingAccount ? '删除中' : '删除账号' }}
+            </button>
+            <div v-if="deleteAccountStep === 'confirm'" class="confirm-box" role="alert">
+              <p>请再次确认删除账号。本操作只会在点击确认后调用 Bridge 删除接口。</p>
+              <div class="confirm-actions">
+                <button class="secondary-button" type="button" :disabled="deletingAccount" @click="cancelDeleteAccount">取消</button>
+                <button class="danger-button" type="button" :disabled="deletingAccount" @click="confirmDeleteAccount">
+                  {{ deletingAccount ? '删除中' : '确认删除' }}
+                </button>
+              </div>
+            </div>
+          </section>
+        </section>
+
+        <section v-else-if="activeView === 'info'" key="info" class="view-stack">
+          <section class="panel">
+            <div class="section-head">
+              <div>
+                <p class="section-label">隐私承诺</p>
+                <h2>房间只显示抽象状态</h2>
+              </div>
+              <span class="status-chip">内测</span>
+            </div>
+            <ul class="info-list">
+              <li>不展示具体 App 名称。</li>
+              <li>不展示使用内容、聊天对象、浏览记录或使用时长。</li>
+              <li>可以随时暂停共享、解绑或删除数据。</li>
+              <li>安装和内测期间，Bridge 接入失败时会保留浏览器预览态，不会输出密钥或私密字段。</li>
+              <li>内测反馈只需描述抽象状态误判、配对或小组件问题，不要提交包含私密内容的截图。</li>
+            </ul>
+          </section>
+
           <section class="panel compact-panel">
-            <p class="section-label">抽象状态类别</p>
-            <div class="category-grid" aria-label="状态类别">
-              <span
-                v-for="item in visibleStatusConfigs"
-                :key="item.code"
-                :class="{ 'is-current': item.code === currentStatus.code }"
-              >
-                {{ item.label }}
-              </span>
+            <p class="section-label">使用入口</p>
+            <div class="info-actions">
+              <button class="secondary-button" type="button" @click="setActiveView('settings')">管理隐私</button>
+              <button class="secondary-button" type="button" @click="setActiveView('pairing')">管理配对</button>
             </div>
           </section>
         </section>

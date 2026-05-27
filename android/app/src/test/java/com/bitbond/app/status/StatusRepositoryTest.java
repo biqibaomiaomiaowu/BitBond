@@ -88,6 +88,27 @@ public class StatusRepositoryTest {
     }
 
     @Test
+    public void uploadCurrentStatusRejectsOfflineAndPausedWithoutRpc() {
+        FakeRpcClient rpcClient = new FakeRpcClient();
+        StatusRepository repository = new StatusRepository(rpcClient);
+
+        ApiResult<CurrentStatusResult> offline = repository.uploadCurrentStatus(
+                SESSION,
+                "offline",
+                Instant.parse("2026-05-25T08:30:00Z"));
+        ApiResult<CurrentStatusResult> paused = repository.uploadCurrentStatus(
+                SESSION,
+                "paused",
+                Instant.parse("2026-05-25T08:30:00Z"));
+
+        assertFalse(offline.isSuccess());
+        assertFalse(paused.isSuccess());
+        assertEquals("invalid_status_code", offline.error().code());
+        assertEquals("invalid_status_code", paused.error().code());
+        assertEquals(0, rpcClient.calls.size());
+    }
+
+    @Test
     public void getPartnerStatusCallsRpcWithEmptyPayloadAndParsesActivePartner() throws Exception {
         FakeRpcClient rpcClient = new FakeRpcClient()
                 .respondWith("get_partner_status", activePartnerResponse());

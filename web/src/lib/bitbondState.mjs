@@ -111,6 +111,10 @@ export const statusConfigs = [
   },
 ];
 
+export const privacyCategoryCodes = statusConfigs
+  .map((status) => status.code)
+  .filter((code) => code !== 'offline' && code !== 'paused');
+
 const avatarChoicesSeed = [
   { id: 'cat', name: '小猫', assetKey: 'avatars/cat' },
   { id: 'dog', name: '小狗', assetKey: 'avatars/dog' },
@@ -152,6 +156,10 @@ export function createFallbackBridgeState() {
       kind: 'idle',
       message: '',
     },
+    interactions: {
+      unreadCount: 0,
+      items: [],
+    },
   };
 }
 
@@ -178,6 +186,7 @@ export function buildInitialState(rawBridgeJson) {
     },
     partner: sanitizePartner(parsed.partner, fallback.partner),
     notice: fallback.notice,
+    interactions: fallback.interactions,
   };
 }
 
@@ -360,7 +369,9 @@ export function applyPartnerStatusResult(currentState, rawBridgeJson) {
         ? partnerStatus.statusCode
         : currentState.partner?.statusCode;
   const updatedAt =
-    typeof partnerStatus.statusUpdatedAt === 'string'
+    partnerStatus.statusUpdatedAt === null
+      ? ''
+      : typeof partnerStatus.statusUpdatedAt === 'string'
       ? partnerStatus.statusUpdatedAt
       : partnerStatus.updatedAt;
 
@@ -385,9 +396,156 @@ export function applyPartnerStatusResult(currentState, rawBridgeJson) {
   };
 }
 
+export function applyPauseSharingResult(currentState, rawBridgeJson) {
+  return applySharingResult(currentState, rawBridgeJson, {
+    sharing: false,
+    statusText: '已暂停共享',
+    successMessage: '已暂停共享',
+    errorMessage: '暂停共享失败，请稍后再试',
+  });
+}
+
+export function applyResumeSharingResult(currentState, rawBridgeJson) {
+  return applySharingResult(currentState, rawBridgeJson, {
+    sharing: true,
+    statusText: '你正在共享抽象状态',
+    successMessage: '已恢复共享',
+    errorMessage: '恢复共享失败，请稍后再试',
+  });
+}
+
+export function applyPrivacySettingsResult(currentSettings = {}, rawBridgeJson) {
+  const parsed = parseBridgeJson(rawBridgeJson);
+  const fallback = sanitizePrivacySettings(currentSettings);
+
+  if (parsed?.ok !== true) {
+    return {
+      settings: fallback,
+      notice: {
+        kind: 'error',
+        message: '隐私设置更新失败，请稍后再试',
+      },
+    };
+  }
+
+  const data = pickDataObject(parsed);
+  const source =
+    data.allowedStatuses ??
+    data.enabledCategories ??
+    data.categories ??
+    data.categoryEnabled ??
+    fallback.enabledCategories;
+
+  return {
+    settings: sanitizePrivacySettings({ allowedStatuses: source }),
+    notice: {
+      kind: 'success',
+      message: '隐私设置已更新',
+    },
+  };
+}
+
+export function applyLatestInteractionsResult(currentState, rawBridgeJson) {
+  const parsed = parseBridgeJson(rawBridgeJson);
+
+  if (parsed?.ok !== true) {
+    return {
+      ...currentState,
+      notice: {
+        kind: 'error',
+        message: '互动加载失败，请稍后再试',
+      },
+    };
+  }
+
+  const data = pickDataObject(parsed);
+  const items = sanitizeInteractions(data.interactions);
+
+  return {
+    ...currentState,
+    interactions: {
+      items,
+      unreadCount: countUnreadInteractions(items),
+    },
+  };
+}
+
+export function applyMarkInteractionsSeenResult(currentState, rawBridgeJson) {
+  const parsed = parseBridgeJson(rawBridgeJson);
+
+  if (parsed?.ok !== true) {
+    return {
+      ...currentState,
+      notice: {
+        kind: 'error',
+        message: '互动已读标记失败，请稍后再试',
+      },
+    };
+  }
+
+  const items = sanitizeInteractions(currentState?.interactions?.items).map((interaction) => ({
+    ...interaction,
+    seen: true,
+  }));
+
+  return {
+    ...currentState,
+    interactions: {
+      items,
+      unreadCount: 0,
+    },
+  };
+}
+
+export function applyDeleteAccountResult(currentState, rawBridgeJson) {
+  const parsed = parseBridgeJson(rawBridgeJson);
+
+  if (parsed?.ok !== true) {
+    return {
+      ...currentState,
+      notice: {
+        kind: 'error',
+        message: '删除账号失败，请稍后再试',
+      },
+    };
+  }
+
+  const offline = getStatusConfig('offline');
+
+  return {
+    ...currentState,
+    self: {
+      ...currentState.self,
+      sharing: false,
+      statusText: '账号已删除，本机已停止共享',
+    },
+    pair: {
+      ...currentState.pair,
+      paired: false,
+      nickname: '',
+      inviteCode: '',
+      expiresAt: '',
+      coupleId: '',
+    },
+    partner: {
+      statusCode: offline.code,
+      statusText: offline.statusText,
+      updatedAt: '账号已删除',
+      areaLabel: offline.areaLabel,
+    },
+    interactions: {
+      unreadCount: 0,
+      items: [],
+    },
+    notice: {
+      kind: 'success',
+      message: '账号已删除，本机数据已清空',
+    },
+  };
+}
+
 export function applyDebugForegroundResult(currentState, rawBridgeJson) {
   const parsed = parseBridgeJson(rawBridgeJson);
-  const data = pickDataObject(parsed);
 
   if (parsed?.ok !== true) {
     return {
@@ -401,9 +559,7 @@ export function applyDebugForegroundResult(currentState, rawBridgeJson) {
 
   return {
     ...currentState,
-    debugForeground: {
-      enabled: data.enabled === true,
-    },
+    debugForeground: sanitizeDebugForeground(pickDataObject(parsed)),
   };
 }
 
@@ -588,28 +744,186 @@ export function buildSettingsViewModel(state) {
   return {
     paired,
     partnerName: paired ? pair.nickname || '对方' : '未配对',
-    actions: paired
-      ? [
-          {
-            id: 'unlink',
-            label: '解除配对',
-            bridgeMethod: 'unlink',
-            kind: 'danger',
-          },
-        ]
-      : [],
+    actions: [
+      ...(
+        paired
+          ? [
+              {
+                id: 'unlink',
+                label: '解除配对',
+                bridgeMethod: 'unlink',
+                kind: 'danger',
+              },
+            ]
+          : []
+      ),
+      {
+        id: 'pause-sharing',
+        label: '暂停共享',
+        bridgeMethod: 'pauseSharing',
+        kind: 'secondary',
+      },
+      {
+        id: 'resume-sharing',
+        label: '恢复共享',
+        bridgeMethod: 'resumeSharing',
+        kind: 'primary',
+      },
+      {
+        id: 'delete-account',
+        label: '删除账号',
+        bridgeMethod: 'deleteAccount',
+        kind: 'danger',
+      },
+    ],
+  };
+}
+
+export function buildSharingViewModel(state) {
+  const self = pickObject(state?.self);
+  const isSharing = self.sharing === true;
+
+  return {
+    isSharing,
+    title: isSharing ? '共享已开启' : '共享已暂停',
+    statusText:
+      typeof self.statusText === 'string' && self.statusText.trim()
+        ? self.statusText
+        : isSharing
+          ? '你正在共享抽象状态'
+          : '已暂停共享',
+    primaryAction: isSharing
+      ? {
+          id: 'pause-sharing',
+          label: '暂停共享',
+          bridgeMethod: 'pauseSharing',
+          kind: 'secondary',
+        }
+      : {
+          id: 'resume-sharing',
+          label: '恢复共享',
+          bridgeMethod: 'resumeSharing',
+          kind: 'primary',
+        },
+  };
+}
+
+export function buildPrivacySettingsViewModel(settings = {}) {
+  const sanitized = sanitizePrivacySettings(settings);
+  const enabledSet = new Set(sanitized.enabledCategories);
+
+  return {
+    enabledCategories: sanitized.enabledCategories,
+    categories: privacyCategoryCodes.map((code) => {
+      const status = getStatusConfig(code);
+
+      return {
+        code,
+        label: status.label,
+        statusText: status.statusText,
+        enabled: enabledSet.has(code),
+      };
+    }),
+    actions: [
+      {
+        id: 'get-privacy-settings',
+        label: '刷新隐私设置',
+        bridgeMethod: 'getPrivacySettings',
+        kind: 'secondary',
+      },
+      {
+        id: 'update-privacy-settings',
+        label: '更新隐私设置',
+        bridgeMethod: 'updatePrivacySettings',
+        kind: 'primary',
+      },
+    ],
+  };
+}
+
+export function buildPrivacySettingsUpdatePayload(enabledCategories, metadata = {}) {
+  const meta = pickObject(metadata);
+  const payload = {
+    allowedStatuses: sanitizeEnabledCategories(enabledCategories),
+  };
+
+  if (typeof meta.source === 'string' && meta.source.trim()) {
+    payload.source = meta.source;
+  }
+  if (typeof meta.requestedAt === 'string' && meta.requestedAt.trim()) {
+    payload.requestedAt = meta.requestedAt;
+  }
+
+  return JSON.stringify(payload);
+}
+
+export function buildInteractionsViewModel(state) {
+  const items = sanitizeInteractions(state?.interactions?.items);
+  const unreadInteractionIds = items
+    .filter((interaction) => interaction.type === 'heart' && interaction.seen === false)
+    .map((interaction) => interaction.id);
+
+  return {
+    items,
+    unreadCount: unreadInteractionIds.length,
+    hasUnreadHeart: unreadInteractionIds.length > 0,
+    unreadInteractionIds,
+  };
+}
+
+export function buildHomeStatusViewModel(state) {
+  const pair = pickObject(state?.pair);
+  const partner = pickObject(state?.partner);
+  const notice = pickObject(state?.notice);
+
+  if (pair.paired !== true) {
+    return {
+      state: 'unpaired',
+      title: '还没有配对对象',
+      message: '还没有配对对象，生成或接受配对码后会显示抽象状态。',
+    };
+  }
+
+  if (notice.kind === 'error') {
+    return {
+      state: 'network_error',
+      title: '状态暂时不可用',
+      message: '网络暂时不可用，房间会保留最近一次抽象状态。',
+    };
+  }
+
+  if (partner.statusCode === 'paused') {
+    return {
+      state: 'partner_paused',
+      title: '对方已暂停共享',
+      message: '对方已暂停共享，房间不会显示具体应用、内容或使用时长。',
+    };
+  }
+
+  if (!partner.statusCode || partner.statusCode === 'offline') {
+    return {
+      state: 'empty',
+      title: '还没有新的状态',
+      message: '对方暂时没有新的抽象状态，可以稍后刷新。',
+    };
+  }
+
+  return {
+    state: 'ready',
+    title: '抽象状态已同步',
+    message: '房间只展示抽象类别，不展示具体应用或内容。',
   };
 }
 
 export function buildDebugViewModel(debugForeground) {
-  const source = pickObject(debugForeground?.debugForeground ?? debugForeground?.data ?? debugForeground);
+  const source = sanitizeDebugForeground(debugForeground?.debugForeground ?? debugForeground?.data ?? debugForeground);
   const enabled = source.enabled === true;
 
   return {
     enabled,
     title: enabled ? '调试信息已开启' : '调试信息不可用',
     description: enabled ? '当前构建允许读取前台调试字段。' : '非调试构建会隐藏包名和应用字段。',
-    packageFields: enabled ? buildDebugPackageFields(source) : [],
+    packageFields: [],
     actions: [
       {
         id: 'get-debug-foreground-app',
@@ -632,7 +946,11 @@ function sanitizePartner(partner, fallbackPartner) {
   const safePartner = {
     statusCode: safeStatus.code,
     statusText: safeStatus.statusText,
-    updatedAt: typeof partner.updatedAt === 'string' ? partner.updatedAt : fallbackPartner.updatedAt,
+    updatedAt: partner.updatedAt === null
+      ? ''
+      : typeof partner.updatedAt === 'string'
+        ? partner.updatedAt
+        : fallbackPartner.updatedAt,
     areaLabel: safeStatus.areaLabel,
   };
 
@@ -653,16 +971,105 @@ function sanitizeAvatarChoices(avatars) {
   return safeChoices.length > 0 ? safeChoices : avatarChoicesSeed;
 }
 
+function applySharingResult(currentState, rawBridgeJson, options) {
+  const parsed = parseBridgeJson(rawBridgeJson);
+
+  if (parsed?.ok !== true) {
+    return {
+      ...currentState,
+      notice: {
+        kind: 'error',
+        message: options.errorMessage,
+      },
+    };
+  }
+
+  return {
+    ...currentState,
+    self: {
+      ...currentState.self,
+      sharing: options.sharing,
+      statusText: options.statusText,
+    },
+    notice: {
+      kind: 'success',
+      message: options.successMessage,
+    },
+  };
+}
+
+function sanitizePrivacySettings(settings = {}) {
+  const source = pickObject(settings);
+  const enabledCategories = sanitizeEnabledCategories(
+    source.allowedStatuses ?? source.enabledCategories ?? source.categories,
+  );
+
+  return {
+    enabledCategories,
+  };
+}
+
+export function sanitizeDebugForeground(debugForeground) {
+  const source = pickObject(debugForeground);
+
+  return {
+    enabled: source.enabled === true,
+  };
+}
+
+function sanitizeEnabledCategories(value) {
+  if (Array.isArray(value)) {
+    const enabledSet = new Set(value.filter((code) => typeof code === 'string'));
+    return privacyCategoryCodes.filter((code) => enabledSet.has(code));
+  }
+
+  if (value && typeof value === 'object') {
+    const enabledSet = new Set(
+      Object.entries(value)
+        .filter(([, enabled]) => enabled === true)
+        .map(([code]) => code),
+    );
+    return privacyCategoryCodes.filter((code) => enabledSet.has(code));
+  }
+
+  return [...privacyCategoryCodes];
+}
+
+function sanitizeInteractions(interactions) {
+  if (!Array.isArray(interactions)) {
+    return [];
+  }
+
+  return interactions
+    .map((interaction) => pickObject(interaction))
+    .filter((interaction) => interaction.type === 'heart')
+    .map((interaction) => {
+      const id =
+        typeof interaction.id === 'string'
+          ? interaction.id.trim()
+          : typeof interaction.interactionId === 'string'
+            ? interaction.interactionId.trim()
+            : '';
+      return {
+        id,
+        type: 'heart',
+        createdAt: typeof interaction.createdAt === 'string' ? interaction.createdAt : '',
+        seen: interaction.seen === true,
+      };
+    })
+    .filter((interaction) => interaction.id);
+}
+
+function countUnreadInteractions(interactions) {
+  return interactions.filter((interaction) => interaction.seen === false).length;
+}
+
 function normalizeAvatarId(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function buildDebugPackageFields(source) {
-  return [
-    { key: 'code', label: '状态码', value: source.code },
-    { key: 'packageName', label: '包名', value: source.packageName },
-    { key: 'appName', label: '应用名', value: source.appName },
-  ].filter((field) => typeof field.value === 'string' && field.value.trim());
+function buildDebugPackageFields() {
+  return [];
 }
 
 function pickDataObject(parsed) {

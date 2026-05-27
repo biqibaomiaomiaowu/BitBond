@@ -15,6 +15,8 @@ import android.webkit.WebResourceResponse;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
+import com.bitbond.app.account.AccountRepository;
+import com.bitbond.app.analytics.AnalyticsRepository;
 import com.bitbond.app.api.ApiError;
 import com.bitbond.app.api.ApiResult;
 import com.bitbond.app.api.HttpSupabaseRpcClient;
@@ -29,10 +31,13 @@ import com.bitbond.app.avatar.AvatarModels.AvatarOption;
 import com.bitbond.app.avatar.AvatarRepository;
 import com.bitbond.app.bridge.BitBondBridgeController;
 import com.bitbond.app.config.SupabaseConfig;
+import com.bitbond.app.interaction.InteractionRepository;
 import com.bitbond.app.pairing.PairingGateway;
 import com.bitbond.app.pairing.PairingModels.CoupleState;
 import com.bitbond.app.pairing.PairingModels.PairInvite;
 import com.bitbond.app.pairing.PairingRepository;
+import com.bitbond.app.privacy.PrivacyRepository;
+import com.bitbond.app.sharing.SharingRepository;
 import com.bitbond.app.status.DebugForegroundGateway;
 import com.bitbond.app.status.DebugForegroundService;
 import com.bitbond.app.status.ForegroundAppReader;
@@ -49,6 +54,7 @@ import com.bitbond.app.status.StatusUploadCoordinator;
 import com.bitbond.app.status.StatusUploadTrigger;
 import com.bitbond.app.status.UsageAccessGateway;
 import com.bitbond.app.status.UsageAccessHelper;
+import com.bitbond.app.widget.WidgetStatusCache;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -217,6 +223,11 @@ public class MainActivity extends Activity {
             PairingRepository pairingRepository = new PairingRepository(rpcClient);
             AvatarRepository avatarRepository = new AvatarRepository(rpcClient);
             StatusRepository statusRepository = new StatusRepository(rpcClient);
+            SharingRepository sharingRepository = new SharingRepository(rpcClient);
+            PrivacyRepository privacyRepository = new PrivacyRepository(rpcClient);
+            InteractionRepository interactionRepository = new InteractionRepository(rpcClient);
+            AccountRepository accountRepository = new AccountRepository(rpcClient);
+            AnalyticsRepository analyticsRepository = new AnalyticsRepository(rpcClient);
             StatusMapper statusMapper = loadStatusMapper();
             StatusUploadCoordinator statusUploadCoordinator = new StatusUploadCoordinator(
                     usageAccessGateway,
@@ -235,11 +246,17 @@ public class MainActivity extends Activity {
                     pairingRepository,
                     avatarRepository,
                     statusRepository,
+                    sharingRepository,
+                    privacyRepository,
+                    interactionRepository,
+                    accountRepository,
+                    analyticsRepository,
                     statusUploadTrigger,
                     usageAccessGateway,
                     accessibilityAccessGateway,
                     batteryOptimizationGateway,
-                    debugForeground);
+                    debugForeground,
+                    new WidgetStatusCache(this));
         } catch (RuntimeException exception) {
             authGateway = new FailingAuthGateway("bridge_not_configured", "Bridge could not be configured");
             statusUploadTrigger = null;

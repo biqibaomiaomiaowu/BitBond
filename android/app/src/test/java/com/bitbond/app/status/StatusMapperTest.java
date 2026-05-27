@@ -33,6 +33,18 @@ public class StatusMapperTest {
     }
 
     @Test
+    public void commonShortVideoAndStreamingPackagesMapToAbstractStatuses() throws IOException {
+        StatusMapper mapper = StatusMapper.fromJson(readAsset());
+
+        assertEquals("short_video", mapper.mapPackageName("com.ss.android.ugc.aweme"));
+        assertEquals("short_video", mapper.mapPackageName("com.smile.gifmaker"));
+        assertEquals("short_video", mapper.mapPackageName("com.zhiliaoapp.musically"));
+        assertEquals("watching_show", mapper.mapPackageName("com.qiyi.video"));
+        assertEquals("watching_show", mapper.mapPackageName("com.mgtv.tv"));
+        assertEquals("watching_show", mapper.mapPackageName("tv.danmaku.bilibilihd"));
+    }
+
+    @Test
     public void unknownPackageFallsBackOnline() throws IOException {
         StatusMapper mapper = StatusMapper.fromJson(readAsset());
 

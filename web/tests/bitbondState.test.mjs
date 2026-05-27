@@ -1,23 +1,38 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {
+import * as bitbondState from '../src/lib/bitbondState.mjs';
+
+const {
   advanceRoomMotionPhase,
   applyAcceptInviteResult,
   applyAvatarSelectionResult,
   applyDebugForegroundResult,
+  applyDeleteAccountResult,
+  applyLatestInteractionsResult,
+  applyMarkInteractionsSeenResult,
   applyPairInviteResult,
   applyPartnerStatusResult,
+  applyPauseSharingResult,
+  applyPrivacySettingsResult,
+  applyResumeSharingResult,
   applyUnlinkResult,
   buildAvatarViewModel,
   buildDebugViewModel,
+  buildHomeStatusViewModel,
   buildInitialState,
+  buildInteractionsViewModel,
   buildPairingViewModel,
   buildPermissionViewModel,
+  buildPrivacySettingsUpdatePayload,
+  buildPrivacySettingsViewModel,
   buildSettingsViewModel,
+  buildSharingViewModel,
   createFallbackBridgeState,
   getRoomPresentation,
+  privacyCategoryCodes,
+  sanitizeDebugForeground,
   statusConfigs,
-} from '../src/lib/bitbondState.mjs';
+} = bitbondState;
 
 test('fallback bridge state exposes abstract partner status without private app details', () => {
   const state = createFallbackBridgeState();
@@ -51,6 +66,21 @@ test('status config covers the first-version abstract status set', () => {
     expected,
   );
   assert.equal(statusConfigs.find((item) => item.code === 'music')?.propFile, 'prop_music_headphone.png');
+});
+
+test('privacy category codes include only shareable abstract activity categories', () => {
+  assert.deepEqual(privacyCategoryCodes, [
+    'short_video',
+    'watching_show',
+    'reading',
+    'music',
+    'gaming',
+    'social',
+    'online',
+    'resting',
+  ]);
+  assert.equal(privacyCategoryCodes.includes('offline'), false);
+  assert.equal(privacyCategoryCodes.includes('paused'), false);
 });
 
 test('buildInitialState merges valid bridge JSON over the local fallback', () => {
@@ -279,6 +309,72 @@ test('applyPartnerStatusResult keeps only abstract partner status', () => {
   assertSerializedValuesAbsent(state, ['WeChat', 'Alice', '聊天内容', 'status-token-secret']);
 });
 
+test('applyPartnerStatusResult shows partner paused without leaking app details', () => {
+  const state = applyPartnerStatusResult(
+    createFallbackBridgeState(),
+    JSON.stringify({
+      ok: true,
+      data: {
+        partnerStatus: {
+          paired: true,
+          partner: {
+            nickname: '小禾',
+          },
+          statusCode: 'reading',
+          statusUpdatedAt: '刚刚',
+          isPaused: true,
+          appName: 'PrivateApp',
+          content: 'Private reading title',
+        },
+      },
+      token: 'paused-token-secret',
+    }),
+  );
+  const viewModel = buildHomeStatusViewModel(state);
+
+  assert.equal(state.partner.statusCode, 'paused');
+  assert.equal(state.partner.statusText, '已暂停共享');
+  assert.equal(viewModel.state, 'partner_paused');
+  assert.match(viewModel.message, /对方已暂停共享/);
+  assertPrivateFieldsAbsent(state);
+  assertSerializedValuesAbsent(state, ['PrivateApp', 'Private reading title', 'paused-token-secret']);
+});
+
+test('applyPartnerStatusResult clears old timestamp when partner is offline', () => {
+  const fallback = createFallbackBridgeState();
+  const current = {
+    ...fallback,
+    partner: {
+      ...fallback.partner,
+      statusCode: 'music',
+      statusText: '正在听歌',
+      updatedAt: '2026-05-26T08:30:00.000Z',
+    },
+  };
+
+  const state = applyPartnerStatusResult(
+    current,
+    JSON.stringify({
+      ok: true,
+      data: {
+        partnerStatus: {
+          paired: true,
+          partner: {
+            nickname: '小禾',
+          },
+          statusCode: 'offline',
+          statusUpdatedAt: null,
+          expiresAt: null,
+          isPaused: false,
+        },
+      },
+    }),
+  );
+
+  assert.equal(state.partner.statusCode, 'offline');
+  assert.equal(state.partner.updatedAt, '');
+});
+
 test('applyPartnerStatusResult keeps current partner status when partner status code is missing', () => {
   const state = applyPartnerStatusResult(
     createFallbackBridgeState(),
@@ -343,6 +439,263 @@ test('applyPartnerStatusResult clears partner to offline when partner status is 
   assertSerializedValuesAbsent(state, ['deduplicated', 'com.example.private', 'PrivateApp', 'unpaired-token-secret']);
 });
 
+test('home status view model exposes unpaired and network empty states', () => {
+  const unpaired = {
+    ...createFallbackBridgeState(),
+    pair: {
+      paired: false,
+      nickname: '',
+    },
+  };
+  const networkError = {
+    ...createFallbackBridgeState(),
+    notice: {
+      kind: 'error',
+      message: '状态同步失败，请稍后再试',
+    },
+  };
+
+  assert.equal(buildHomeStatusViewModel(unpaired).state, 'unpaired');
+  assert.match(buildHomeStatusViewModel(unpaired).message, /还没有配对对象/);
+  assert.equal(buildHomeStatusViewModel(networkError).state, 'network_error');
+  assert.match(buildHomeStatusViewModel(networkError).message, /网络暂时不可用/);
+});
+
+test('pause and resume sharing results update only self sharing state', () => {
+  const paused = applyPauseSharingResult(
+    createFallbackBridgeState(),
+    JSON.stringify({
+      ok: true,
+      data: {
+        sharing: false,
+        statusText: '已暂停共享',
+        appName: 'PrivateApp',
+      },
+      token: 'pause-token-secret',
+    }),
+  );
+  const resumed = applyResumeSharingResult(
+    paused,
+    JSON.stringify({
+      ok: true,
+      data: {
+        sharing: true,
+        statusText: '你正在共享抽象状态',
+        packageName: 'com.example.private',
+      },
+      token: 'resume-token-secret',
+    }),
+  );
+
+  assert.equal(paused.self.sharing, false);
+  assert.equal(paused.self.statusText, '已暂停共享');
+  assert.equal(paused.notice.kind, 'success');
+  assert.equal(resumed.self.sharing, true);
+  assert.equal(resumed.self.statusText, '你正在共享抽象状态');
+  assert.equal(buildSharingViewModel(paused).primaryAction.bridgeMethod, 'resumeSharing');
+  assert.equal(buildSharingViewModel(resumed).primaryAction.bridgeMethod, 'pauseSharing');
+  assertPrivateFieldsAbsent(resumed);
+  assertSerializedValuesAbsent(resumed, [
+    'PrivateApp',
+    'com.example.private',
+    'pause-token-secret',
+    'resume-token-secret',
+  ]);
+});
+
+test('privacy settings result sanitizes categories and exposes toggle actions', () => {
+  const result = applyPrivacySettingsResult(
+    { enabledCategories: ['music'] },
+    JSON.stringify({
+      ok: true,
+      data: {
+        enabledCategories: ['paused', 'reading', 'offline', 'music'],
+        packageName: 'com.example.private',
+      },
+      token: 'privacy-token-secret',
+    }),
+  );
+  const viewModel = buildPrivacySettingsViewModel(result.settings);
+
+  assert.deepEqual(result.settings.enabledCategories, ['reading', 'music']);
+  assert.equal(result.notice.kind, 'success');
+  assert.deepEqual(
+    viewModel.categories.map((category) => category.code),
+    privacyCategoryCodes,
+  );
+  assert.deepEqual(
+    viewModel.categories.filter((category) => category.enabled).map((category) => category.code),
+    ['reading', 'music'],
+  );
+  assert.deepEqual(
+    viewModel.actions.map((action) => action.bridgeMethod),
+    ['getPrivacySettings', 'updatePrivacySettings'],
+  );
+  assertSerializedValuesAbsent(result, ['com.example.private', 'privacy-token-secret', 'offline', 'paused']);
+});
+
+test('privacy settings accepts Android allowedStatuses and update payload emits only allowedStatuses', () => {
+  const result = applyPrivacySettingsResult(
+    { enabledCategories: ['music'] },
+    JSON.stringify({
+      ok: true,
+      data: {
+        allowedStatuses: ['paused', 'reading', 'offline', 'gaming'],
+      },
+    }),
+  );
+  const payload = buildPrivacySettingsUpdatePayload(['paused', 'reading', 'offline', 'gaming'], {
+    source: 'bitbond_web_privacy',
+    requestedAt: '2026-05-27T09:00:00.000Z',
+  });
+  const parsedPayload = JSON.parse(payload);
+
+  assert.deepEqual(result.settings.enabledCategories, ['reading', 'gaming']);
+  assert.deepEqual(parsedPayload, {
+    allowedStatuses: ['reading', 'gaming'],
+    source: 'bitbond_web_privacy',
+    requestedAt: '2026-05-27T09:00:00.000Z',
+  });
+  assert.equal('enabledCategories' in parsedPayload, false);
+  assert.equal(parsedPayload.allowedStatuses.includes('offline'), false);
+  assert.equal(parsedPayload.allowedStatuses.includes('paused'), false);
+});
+
+test('latest interactions keeps unread hearts without storing private fields', () => {
+  const state = applyLatestInteractionsResult(
+    createFallbackBridgeState(),
+    JSON.stringify({
+      ok: true,
+      data: {
+        interactions: [
+          {
+            id: 'heart-1',
+            type: 'heart',
+            createdAt: '2026-05-27T08:00:00.000Z',
+            seen: false,
+            fromUserId: 'private-user-id',
+            access_token: 'interaction-access-secret',
+            message: 'private note',
+          },
+          {
+            id: 'note-1',
+            type: 'message',
+            content: 'private message',
+          },
+        ],
+      },
+      token: 'interaction-token-secret',
+    }),
+  );
+  const viewModel = buildInteractionsViewModel(state);
+  const seen = applyMarkInteractionsSeenResult(
+    state,
+    JSON.stringify({
+      ok: true,
+      data: {
+        seen: true,
+      },
+      token: 'seen-token-secret',
+    }),
+  );
+
+  assert.equal(state.interactions.unreadCount, 1);
+  assert.deepEqual(state.interactions.items, [
+    {
+      id: 'heart-1',
+      type: 'heart',
+      createdAt: '2026-05-27T08:00:00.000Z',
+      seen: false,
+    },
+  ]);
+  assert.equal(viewModel.hasUnreadHeart, true);
+  assert.deepEqual(viewModel.unreadInteractionIds, ['heart-1']);
+  assert.equal(seen.interactions.unreadCount, 0);
+  assert.equal(seen.interactions.items[0].seen, true);
+  assertPrivateFieldsAbsent(seen);
+  assertSerializedValuesAbsent(seen, [
+    'private-user-id',
+    'interaction-access-secret',
+    'private note',
+    'private message',
+    'interaction-token-secret',
+    'seen-token-secret',
+  ]);
+});
+
+test('latest interactions accepts Android interactionId wire key', () => {
+  const state = applyLatestInteractionsResult(
+    createFallbackBridgeState(),
+    JSON.stringify({
+      ok: true,
+      data: {
+        interactions: [
+          {
+            interactionId: 'heart-android-1',
+            type: 'heart',
+            createdAt: '2026-05-27T08:10:00.000Z',
+            seen: false,
+            packageName: 'com.example.private',
+          },
+        ],
+      },
+      token: 'android-interaction-token-secret',
+    }),
+  );
+  const viewModel = buildInteractionsViewModel(state);
+
+  assert.equal(state.interactions.unreadCount, 1);
+  assert.deepEqual(state.interactions.items, [
+    {
+      id: 'heart-android-1',
+      type: 'heart',
+      createdAt: '2026-05-27T08:10:00.000Z',
+      seen: false,
+    },
+  ]);
+  assert.deepEqual(viewModel.unreadInteractionIds, ['heart-android-1']);
+  assertSerializedValuesAbsent(state, [
+    'interactionId',
+    'com.example.private',
+    'android-interaction-token-secret',
+  ]);
+});
+
+test('delete account result clears local pair and partner only after bridge confirms', () => {
+  const initial = {
+    ...createFallbackBridgeState(),
+    pair: {
+      paired: true,
+      nickname: '小禾',
+      inviteCode: 'PAIR-2468',
+      coupleId: 'couple-public-id',
+    },
+  };
+  const rejected = applyDeleteAccountResult(initial, JSON.stringify({ ok: false, token: 'delete-rejected-token' }));
+  const deleted = applyDeleteAccountResult(
+    initial,
+    JSON.stringify({
+      ok: true,
+      data: {
+        deleted: true,
+        packageName: 'com.example.private',
+      },
+      token: 'delete-token-secret',
+    }),
+  );
+
+  assert.equal(rejected.pair.paired, true);
+  assert.equal(rejected.notice.kind, 'error');
+  assert.equal(deleted.pair.paired, false);
+  assert.equal(deleted.pair.nickname, '');
+  assert.equal(deleted.partner.statusCode, 'offline');
+  assert.equal(deleted.partner.updatedAt, '账号已删除');
+  assert.equal(deleted.self.sharing, false);
+  assert.equal(deleted.notice.kind, 'success');
+  assertPrivateFieldsAbsent(deleted);
+  assertSerializedValuesAbsent(deleted, ['com.example.private', 'delete-token-secret']);
+});
+
 test('applyDebugForegroundResult reads data enabled and never stores package name', () => {
   const state = applyDebugForegroundResult(
     createFallbackBridgeState(),
@@ -360,6 +713,51 @@ test('applyDebugForegroundResult reads data enabled and never stores package nam
   assert.deepEqual(state.debugForeground, { enabled: true });
   assertPrivateFieldsAbsent(state);
   assertSerializedValuesAbsent(state, ['com.example.private', 'PrivateApp']);
+});
+
+test('debug foreground sanitizer and view model never expose private bridge fields when enabled', () => {
+  const rawDebugData = {
+    enabled: true,
+    code: 'debug_foreground',
+    packageName: 'com.example.private',
+    appName: 'PrivateApp',
+    usageDuration: 3600,
+    content: 'Private content',
+    chatTarget: 'Alice',
+    token: 'debug-token-secret',
+    access_token: 'debug-access-secret',
+    refresh_token: 'debug-refresh-secret',
+  };
+  const sanitized = sanitizeDebugForeground(rawDebugData);
+  const viewModel = buildDebugViewModel(rawDebugData);
+
+  assert.deepEqual(sanitized, { enabled: true });
+  assert.equal(viewModel.enabled, true);
+  assert.deepEqual(viewModel.packageFields, []);
+  assertPrivateFieldsAbsent(sanitized);
+  assertPrivateFieldsAbsent(viewModel);
+  assertSerializedValuesAbsent(sanitized, [
+    'debug_foreground',
+    'com.example.private',
+    'PrivateApp',
+    '3600',
+    'Private content',
+    'Alice',
+    'debug-token-secret',
+    'debug-access-secret',
+    'debug-refresh-secret',
+  ]);
+  assertSerializedValuesAbsent(viewModel, [
+    'debug_foreground',
+    'com.example.private',
+    'PrivateApp',
+    '3600',
+    'Private content',
+    'Alice',
+    'debug-token-secret',
+    'debug-access-secret',
+    'debug-refresh-secret',
+  ]);
 });
 
 test('applyDebugForegroundResult keeps disabled foreground result abstract', () => {
@@ -546,7 +944,7 @@ test('avatar view model exposes 8 avatar choices', () => {
   );
 });
 
-test('settings view model exposes unlink action and does not expose pause/resume action', () => {
+test('settings view model exposes unlink, pause, resume, and delete account actions', () => {
   const viewModel = buildSettingsViewModel({
     ...createFallbackBridgeState(),
     pair: {
@@ -558,8 +956,9 @@ test('settings view model exposes unlink action and does not expose pause/resume
   const bridgeMethods = viewModel.actions.map((action) => action.bridgeMethod);
 
   assert.ok(bridgeMethods.includes('unlink'));
-  assert.equal(bridgeMethods.includes('pauseSharing'), false);
-  assert.equal(bridgeMethods.includes('resumeSharing'), false);
+  assert.ok(bridgeMethods.includes('pauseSharing'));
+  assert.ok(bridgeMethods.includes('resumeSharing'));
+  assert.ok(bridgeMethods.includes('deleteAccount'));
 });
 
 test('debug view model hides package fields when disabled', () => {

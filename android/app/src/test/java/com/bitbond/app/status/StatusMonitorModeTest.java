@@ -21,7 +21,7 @@ public class StatusMonitorModeTest {
         StatusMonitorMode mode = new StatusMonitorMode(new FakeAccessibilityAccess(true));
 
         assertTrue(mode.shouldPollUsageStats());
-        assertEquals(120_000L, mode.usageStatsPollIntervalMillis());
+        assertEquals(StatusMonitorMode.ACCESSIBILITY_FALLBACK_POLL_INTERVAL_MS, mode.usageStatsPollIntervalMillis());
         assertTrue(mode.isAccessibilityEventMode());
     }
 

@@ -23,7 +23,7 @@ import java.util.concurrent.Executors;
 
 public final class StatusMonitorService extends Service {
     private static final String TAG = "BitBondStatus";
-    static final long POLL_INTERVAL_MS = 15_000L;
+    static final long POLL_INTERVAL_MS = 5_000L;
     private static final int NOTIFICATION_ID = 2601;
     private static final String CHANNEL_ID = "bitbond_status_monitor";
 

@@ -2,16 +2,29 @@ package com.bitbond.app.bridge;
 
 import android.webkit.JavascriptInterface;
 
+import com.bitbond.app.account.AccountGateway;
+import com.bitbond.app.account.AccountModels.DeleteAccountResult;
+import com.bitbond.app.analytics.AnalyticsGateway;
+import com.bitbond.app.analytics.AnalyticsModels.AnalyticsEventResult;
 import com.bitbond.app.api.ApiError;
 import com.bitbond.app.api.ApiResult;
 import com.bitbond.app.auth.AuthGateway;
 import com.bitbond.app.auth.AuthSession;
 import com.bitbond.app.avatar.AvatarGateway;
 import com.bitbond.app.avatar.AvatarModels.AvatarOption;
+import com.bitbond.app.interaction.InteractionGateway;
+import com.bitbond.app.interaction.InteractionModels.HeartInteraction;
+import com.bitbond.app.interaction.InteractionModels.InteractionList;
+import com.bitbond.app.interaction.InteractionModels.MarkSeenResult;
 import com.bitbond.app.pairing.PairingGateway;
 import com.bitbond.app.pairing.PairingModels.CoupleState;
 import com.bitbond.app.pairing.PairingModels.PairInvite;
 import com.bitbond.app.pairing.PairingModels.PartnerProfile;
+import com.bitbond.app.privacy.PrivacyGateway;
+import com.bitbond.app.privacy.PrivacyModels;
+import com.bitbond.app.privacy.PrivacyModels.PrivacySettings;
+import com.bitbond.app.sharing.SharingGateway;
+import com.bitbond.app.sharing.SharingModels.SharingState;
 import com.bitbond.app.status.DebugForegroundGateway;
 import com.bitbond.app.status.StatusGateway;
 import com.bitbond.app.status.StatusModels.PartnerStatus;
@@ -19,7 +32,9 @@ import com.bitbond.app.status.StatusUploadTrigger;
 import com.bitbond.app.status.AccessibilityAccessGateway;
 import com.bitbond.app.status.BatteryOptimizationGateway;
 import com.bitbond.app.status.UsageAccessGateway;
+import com.bitbond.app.widget.WidgetStatusSink;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
@@ -32,11 +47,17 @@ public final class BitBondBridgeController {
     private final PairingGateway pairing;
     private final AvatarGateway avatar;
     private final StatusGateway status;
+    private final SharingGateway sharing;
+    private final PrivacyGateway privacy;
+    private final InteractionGateway interaction;
+    private final AccountGateway account;
+    private final AnalyticsGateway analytics;
     private final StatusUploadTrigger uploadTrigger;
     private final UsageAccessGateway usageAccess;
     private final AccessibilityAccessGateway accessibilityAccess;
     private final BatteryOptimizationGateway batteryOptimization;
     private final DebugForegroundGateway debugForeground;
+    private final WidgetStatusSink widgetStatusSink;
 
     public BitBondBridgeController(
             AuthGateway auth,
@@ -49,15 +70,90 @@ public final class BitBondBridgeController {
             BatteryOptimizationGateway batteryOptimization,
             DebugForegroundGateway debugForeground
     ) {
+        this(
+                auth,
+                pairing,
+                avatar,
+                status,
+                new UnavailableSharingGateway(),
+                new UnavailablePrivacyGateway(),
+                new UnavailableInteractionGateway(),
+                new UnavailableAccountGateway(),
+                new UnavailableAnalyticsGateway(),
+                uploadTrigger,
+                usageAccess,
+                accessibilityAccess,
+                batteryOptimization,
+                debugForeground,
+                WidgetStatusSink.noop());
+    }
+
+    public BitBondBridgeController(
+            AuthGateway auth,
+            PairingGateway pairing,
+            AvatarGateway avatar,
+            StatusGateway status,
+            SharingGateway sharing,
+            PrivacyGateway privacy,
+            InteractionGateway interaction,
+            AccountGateway account,
+            AnalyticsGateway analytics,
+            StatusUploadTrigger uploadTrigger,
+            UsageAccessGateway usageAccess,
+            AccessibilityAccessGateway accessibilityAccess,
+            BatteryOptimizationGateway batteryOptimization,
+            DebugForegroundGateway debugForeground
+    ) {
+        this(
+                auth,
+                pairing,
+                avatar,
+                status,
+                sharing,
+                privacy,
+                interaction,
+                account,
+                analytics,
+                uploadTrigger,
+                usageAccess,
+                accessibilityAccess,
+                batteryOptimization,
+                debugForeground,
+                WidgetStatusSink.noop());
+    }
+
+    public BitBondBridgeController(
+            AuthGateway auth,
+            PairingGateway pairing,
+            AvatarGateway avatar,
+            StatusGateway status,
+            SharingGateway sharing,
+            PrivacyGateway privacy,
+            InteractionGateway interaction,
+            AccountGateway account,
+            AnalyticsGateway analytics,
+            StatusUploadTrigger uploadTrigger,
+            UsageAccessGateway usageAccess,
+            AccessibilityAccessGateway accessibilityAccess,
+            BatteryOptimizationGateway batteryOptimization,
+            DebugForegroundGateway debugForeground,
+            WidgetStatusSink widgetStatusSink
+    ) {
         this.auth = Objects.requireNonNull(auth, "auth");
         this.pairing = Objects.requireNonNull(pairing, "pairing");
         this.avatar = Objects.requireNonNull(avatar, "avatar");
         this.status = Objects.requireNonNull(status, "status");
+        this.sharing = Objects.requireNonNull(sharing, "sharing");
+        this.privacy = Objects.requireNonNull(privacy, "privacy");
+        this.interaction = Objects.requireNonNull(interaction, "interaction");
+        this.account = Objects.requireNonNull(account, "account");
+        this.analytics = Objects.requireNonNull(analytics, "analytics");
         this.uploadTrigger = Objects.requireNonNull(uploadTrigger, "uploadTrigger");
         this.usageAccess = Objects.requireNonNull(usageAccess, "usageAccess");
         this.accessibilityAccess = Objects.requireNonNull(accessibilityAccess, "accessibilityAccess");
         this.batteryOptimization = Objects.requireNonNull(batteryOptimization, "batteryOptimization");
         this.debugForeground = Objects.requireNonNull(debugForeground, "debugForeground");
+        this.widgetStatusSink = Objects.requireNonNull(widgetStatusSink, "widgetStatusSink");
     }
 
     @JavascriptInterface
@@ -79,7 +175,7 @@ public final class BitBondBridgeController {
                 return connectedOfflineInitialStateJson();
             }
 
-            return initialStateJson(result.value()).toString();
+            return initialStateJson(result.value(), initialSharingState(session)).toString();
         } catch (JSONException | RuntimeException exception) {
             return safeInitialStateJson("Bridge 初始化失败，已切换浏览器预览");
         }
@@ -232,6 +328,131 @@ public final class BitBondBridgeController {
         return uploadThenFetchPartnerStatus(true);
     }
 
+    @JavascriptInterface
+    public String pauseSharing() {
+        return setSharingPaused(true);
+    }
+
+    @JavascriptInterface
+    public String resumeSharing() {
+        return setSharingPaused(false);
+    }
+
+    @JavascriptInterface
+    public String getPrivacySettings() {
+        return authenticated(session -> {
+            ApiResult<PrivacySettings> result = privacy.getSettings(session);
+            if (!result.isSuccess()) {
+                return error(result.error());
+            }
+
+            return BridgeResponse.success(new JSONObject(result.value().rawJson()));
+        });
+    }
+
+    @JavascriptInterface
+    public String updatePrivacySettings(String payload) {
+        return authenticated(session -> {
+            List<String> allowedStatuses;
+            try {
+                allowedStatuses = PrivacyModels.sanitizeAllowedStatuses(stringArrayPayload(payload, "allowedStatuses"));
+            } catch (IllegalArgumentException exception) {
+                return BridgeResponse.error("invalid_status_code", "Status code is invalid");
+            }
+
+            ApiResult<PrivacySettings> result = privacy.updateSettings(session, allowedStatuses);
+            if (!result.isSuccess()) {
+                return error(result.error());
+            }
+
+            return BridgeResponse.success(new JSONObject(result.value().rawJson()));
+        });
+    }
+
+    @JavascriptInterface
+    public String sendHeart() {
+        return authenticated(session -> {
+            ApiResult<HeartInteraction> result = interaction.sendHeart(session);
+            if (!result.isSuccess()) {
+                return error(result.error());
+            }
+
+            return BridgeResponse.success(new JSONObject(result.value().rawJson()));
+        });
+    }
+
+    @JavascriptInterface
+    public String sendHeart(String payload) {
+        return sendHeart();
+    }
+
+    @JavascriptInterface
+    public String getLatestInteractions() {
+        return authenticated(session -> {
+            ApiResult<InteractionList> result = interaction.getLatestInteractions(session);
+            if (!result.isSuccess()) {
+                return error(result.error());
+            }
+
+            return BridgeResponse.success(new JSONObject(result.value().rawJson()));
+        });
+    }
+
+    @JavascriptInterface
+    public String markInteractionsSeen(String payload) {
+        return authenticated(session -> {
+            List<String> interactionIds = stringArrayPayload(payload, "interactionIds");
+            if (interactionIds.isEmpty()) {
+                return BridgeResponse.error("invalid_interaction_ids", "Interaction ids are required");
+            }
+
+            ApiResult<MarkSeenResult> result = interaction.markInteractionsSeen(session, interactionIds);
+            if (!result.isSuccess()) {
+                return error(result.error());
+            }
+
+            return BridgeResponse.success(new JSONObject(result.value().rawJson()));
+        });
+    }
+
+    @JavascriptInterface
+    public String deleteAccount(String payload) {
+        if (!confirmedPayload(payload)) {
+            return BridgeResponse.error("invalid_confirmation", "Deletion must be confirmed").toJson();
+        }
+
+        return authenticated(session -> {
+            ApiResult<DeleteAccountResult> result = account.deleteAccount(session);
+            if (!result.isSuccess()) {
+                return error(result.error());
+            }
+
+            return BridgeResponse.success(new JSONObject(result.value().rawJson()));
+        });
+    }
+
+    @JavascriptInterface
+    public String recordAnalyticsEvent(String payload) {
+        return authenticated(session -> {
+            JSONObject source = objectPayload(payload);
+            String eventName = trimmedString(source, "eventName");
+            if (eventName.isEmpty()) {
+                return BridgeResponse.error("invalid_event_name", "Event name is required");
+            }
+
+            JSONObject properties = source.optJSONObject("properties");
+            ApiResult<AnalyticsEventResult> result = analytics.recordEvent(
+                    session,
+                    eventName,
+                    properties == null ? new JSONObject() : properties);
+            if (!result.isSuccess()) {
+                return error(result.error());
+            }
+
+            return BridgeResponse.success(new JSONObject(result.value().rawJson()));
+        });
+    }
+
     private String uploadThenFetchPartnerStatus(boolean compactPartnerStatus) {
         return authenticated(session -> {
             ApiResult<String> uploadResult = uploadTrigger.uploadDetectedStatus(session);
@@ -244,10 +465,22 @@ public final class BitBondBridgeController {
                 return error(statusResult.error());
             }
 
+            widgetStatusSink.cachePartnerStatus(statusResult.value());
             return BridgeResponse.success(uploadPartnerStatusJson(
                     uploadResult.value(),
                     statusResult.value(),
                     compactPartnerStatus));
+        });
+    }
+
+    private String setSharingPaused(boolean paused) {
+        return authenticated(session -> {
+            ApiResult<SharingState> result = sharing.setSharingPaused(session, paused);
+            if (!result.isSuccess()) {
+                return error(result.error());
+            }
+
+            return BridgeResponse.success(new JSONObject(result.value().rawJson()));
         });
     }
 
@@ -291,17 +524,40 @@ public final class BitBondBridgeController {
                 .put("partner", partnerProfileJson(state.partner()));
     }
 
-    private static JSONObject initialStateJson(CoupleState coupleState) throws JSONException {
+    private SharingState initialSharingState(AuthSession session) {
+        ApiResult<SharingState> result = sharing.getSharingState(session);
+        if (!result.isSuccess()) {
+            return defaultSharingState();
+        }
+        return result.value();
+    }
+
+    private static SharingState defaultSharingState() {
+        return new SharingState(
+                true,
+                "online",
+                "{\"sharing\":true,\"statusCode\":\"online\",\"statusUpdatedAt\":null,\"expiresAt\":null,\"isPaused\":false}");
+    }
+
+    private static JSONObject initialStateJson(CoupleState coupleState, SharingState sharingState) throws JSONException {
         boolean paired = coupleState.paired();
         String nickname = paired && coupleState.partner() != null
                 ? normalized(coupleState.partner().nickname(), "")
                 : "";
-        return initialStateJson(true, "Android WebView bridge connected", paired, nickname, paired ? "等待对方状态" : "未配对");
+        boolean sharingEnabled = sharingState == null || sharingState.sharing();
+        return initialStateJson(
+                true,
+                "Android WebView bridge connected",
+                paired,
+                nickname,
+                paired ? "等待对方状态" : "未配对",
+                sharingEnabled,
+                sharingEnabled ? "你正在共享抽象状态" : "已暂停共享");
     }
 
     private static String safeInitialStateJson(String message) {
         try {
-            return initialStateJson(false, message, false, "", "未配对").toString();
+            return initialStateJson(false, message, false, "", "未配对", true, "你正在共享抽象状态").toString();
         } catch (JSONException exception) {
             return "{\"bridge\":{\"ready\":false,\"message\":\"Bridge 初始化失败，已切换浏览器预览\"},\"self\":{\"sharing\":true,\"statusText\":\"你正在共享抽象状态\"},\"pair\":{\"paired\":false,\"nickname\":\"\"},\"partner\":{\"statusCode\":\"offline\",\"updatedAt\":\"未配对\",\"areaLabel\":\"门口\"}}";
         }
@@ -309,7 +565,7 @@ public final class BitBondBridgeController {
 
     private static String connectedOfflineInitialStateJson() {
         try {
-            return initialStateJson(true, "Android WebView bridge connected", false, "", "未配对").toString();
+            return initialStateJson(true, "Android WebView bridge connected", false, "", "未配对", true, "你正在共享抽象状态").toString();
         } catch (JSONException exception) {
             return safeInitialStateJson("Bridge 初始化失败，已切换浏览器预览");
         }
@@ -320,15 +576,17 @@ public final class BitBondBridgeController {
             String bridgeMessage,
             boolean paired,
             String nickname,
-            String updatedAt
+            String updatedAt,
+            boolean sharing,
+            String statusText
     ) throws JSONException {
         return new JSONObject()
                 .put("bridge", new JSONObject()
                         .put("ready", bridgeReady)
-                        .put("message", bridgeMessage))
+                .put("message", bridgeMessage))
                 .put("self", new JSONObject()
-                        .put("sharing", true)
-                        .put("statusText", "你正在共享抽象状态"))
+                        .put("sharing", sharing)
+                        .put("statusText", statusText))
                 .put("pair", new JSONObject()
                         .put("paired", paired)
                         .put("nickname", nickname))
@@ -419,6 +677,47 @@ public final class BitBondBridgeController {
         }
     }
 
+    private static JSONObject objectPayload(String rawPayload) throws JSONException {
+        if (rawPayload == null || rawPayload.trim().isEmpty()) {
+            return new JSONObject();
+        }
+        return new JSONObject(rawPayload);
+    }
+
+    private static String trimmedString(JSONObject payload, String key) {
+        if (!payload.has(key) || payload.isNull(key) || !(payload.opt(key) instanceof String)) {
+            return "";
+        }
+        return payload.optString(key, "").trim();
+    }
+
+    private static List<String> stringArrayPayload(String rawPayload, String key) throws JSONException {
+        JSONObject payload = objectPayload(rawPayload);
+        JSONArray array = payload.optJSONArray(key);
+        List<String> result = new ArrayList<>();
+        if (array == null) {
+            return result;
+        }
+        for (int i = 0; i < array.length(); i++) {
+            Object value = array.opt(i);
+            if (value instanceof String) {
+                String normalized = ((String) value).trim();
+                if (!normalized.isEmpty()) {
+                    result.add(normalized);
+                }
+            }
+        }
+        return result;
+    }
+
+    private static boolean confirmedPayload(String rawPayload) {
+        try {
+            return objectPayload(rawPayload).optBoolean("confirmed", false);
+        } catch (JSONException exception) {
+            return false;
+        }
+    }
+
     private static Object jsonValue(Object value) {
         return value == null ? JSONObject.NULL : value;
     }
@@ -430,6 +729,65 @@ public final class BitBondBridgeController {
 
         String normalized = value.trim();
         return normalized.isEmpty() ? fallback : normalized;
+    }
+
+    private static <T> ApiResult<T> unavailableResult() {
+        return ApiResult.error(new ApiError("bridge_unavailable", "Bridge is unavailable"));
+    }
+
+    private static final class UnavailableSharingGateway implements SharingGateway {
+        @Override
+        public ApiResult<SharingState> getSharingState(AuthSession session) {
+            return unavailableResult();
+        }
+
+        @Override
+        public ApiResult<SharingState> setSharingPaused(AuthSession session, boolean paused) {
+            return unavailableResult();
+        }
+    }
+
+    private static final class UnavailablePrivacyGateway implements PrivacyGateway {
+        @Override
+        public ApiResult<PrivacySettings> getSettings(AuthSession session) {
+            return unavailableResult();
+        }
+
+        @Override
+        public ApiResult<PrivacySettings> updateSettings(AuthSession session, List<String> allowedStatuses) {
+            return unavailableResult();
+        }
+    }
+
+    private static final class UnavailableInteractionGateway implements InteractionGateway {
+        @Override
+        public ApiResult<HeartInteraction> sendHeart(AuthSession session) {
+            return unavailableResult();
+        }
+
+        @Override
+        public ApiResult<InteractionList> getLatestInteractions(AuthSession session) {
+            return unavailableResult();
+        }
+
+        @Override
+        public ApiResult<MarkSeenResult> markInteractionsSeen(AuthSession session, List<String> interactionIds) {
+            return unavailableResult();
+        }
+    }
+
+    private static final class UnavailableAccountGateway implements AccountGateway {
+        @Override
+        public ApiResult<DeleteAccountResult> deleteAccount(AuthSession session) {
+            return unavailableResult();
+        }
+    }
+
+    private static final class UnavailableAnalyticsGateway implements AnalyticsGateway {
+        @Override
+        public ApiResult<AnalyticsEventResult> recordEvent(AuthSession session, String eventName, JSONObject properties) {
+            return unavailableResult();
+        }
     }
 
     private interface AuthenticatedOperation {

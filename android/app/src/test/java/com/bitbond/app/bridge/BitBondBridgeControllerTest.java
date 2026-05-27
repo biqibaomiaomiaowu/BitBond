@@ -5,6 +5,10 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import com.bitbond.app.MainActivity;
+import com.bitbond.app.account.AccountGateway;
+import com.bitbond.app.account.AccountModels.DeleteAccountResult;
+import com.bitbond.app.analytics.AnalyticsGateway;
+import com.bitbond.app.analytics.AnalyticsModels.AnalyticsEventResult;
 import com.bitbond.app.api.ApiError;
 import com.bitbond.app.api.ApiResult;
 import com.bitbond.app.auth.AuthGateway;
@@ -12,10 +16,18 @@ import com.bitbond.app.auth.AuthSession;
 import com.bitbond.app.auth.SessionStore;
 import com.bitbond.app.avatar.AvatarGateway;
 import com.bitbond.app.avatar.AvatarModels.AvatarOption;
+import com.bitbond.app.interaction.InteractionGateway;
+import com.bitbond.app.interaction.InteractionModels.HeartInteraction;
+import com.bitbond.app.interaction.InteractionModels.InteractionList;
+import com.bitbond.app.interaction.InteractionModels.MarkSeenResult;
 import com.bitbond.app.pairing.PairingGateway;
 import com.bitbond.app.pairing.PairingModels.CoupleState;
 import com.bitbond.app.pairing.PairingModels.PairInvite;
 import com.bitbond.app.pairing.PairingModels.PartnerProfile;
+import com.bitbond.app.privacy.PrivacyGateway;
+import com.bitbond.app.privacy.PrivacyModels.PrivacySettings;
+import com.bitbond.app.sharing.SharingGateway;
+import com.bitbond.app.sharing.SharingModels.SharingState;
 import com.bitbond.app.status.DebugForegroundGateway;
 import com.bitbond.app.status.StatusGateway;
 import com.bitbond.app.status.StatusModels.PartnerStatus;
@@ -62,7 +74,25 @@ public class BitBondBridgeControllerTest {
         assertTrue(response.getJSONObject("pair").getBoolean("paired"));
         assertEquals("小禾", response.getJSONObject("pair").getString("nickname"));
         assertEquals("offline", response.getJSONObject("partner").getString("statusCode"));
-        assertEquals(Arrays.asList("auth", "getCurrentCouple"), fixtures.calls);
+        assertEquals(Arrays.asList("auth", "getCurrentCouple", "getSharingState"), fixtures.calls);
+    }
+
+    @Test
+    public void getInitialStateIncludesPersistedPausedSharingState() throws Exception {
+        Fixtures fixtures = new Fixtures();
+        fixtures.pairing.currentCouple = CoupleState.paired(
+                "couple-1",
+                new PartnerProfile("小禾", "avatar_cat"));
+        fixtures.sharing.nextState = new SharingState(
+                false,
+                "paused",
+                "{\"sharing\":false,\"statusCode\":\"paused\",\"isPaused\":true}");
+
+        JSONObject response = json(fixtures.controller().getInitialState());
+
+        assertFalse(response.getJSONObject("self").getBoolean("sharing"));
+        assertEquals("已暂停共享", response.getJSONObject("self").getString("statusText"));
+        assertEquals(Arrays.asList("auth", "getCurrentCouple", "getSharingState"), fixtures.calls);
     }
 
     @Test
@@ -353,6 +383,187 @@ public class BitBondBridgeControllerTest {
     }
 
     @Test
+    public void pauseSharingAuthenticatesAndReturnsPausedPublicPayload() throws Exception {
+        Fixtures fixtures = new Fixtures();
+        fixtures.sharing.nextState = new SharingState(false, "paused", "{\"sharing\":false,\"statusCode\":\"paused\"}");
+
+        JSONObject response = json(fixtures.controller().pauseSharing());
+
+        assertOk(response);
+        JSONObject data = response.getJSONObject("data");
+        assertFalse(data.getBoolean("sharing"));
+        assertEquals("paused", data.getString("statusCode"));
+        assertTrue(fixtures.sharing.lastPaused);
+        assertEquals(Arrays.asList("auth", "setSharingPaused"), fixtures.calls);
+    }
+
+    @Test
+    public void resumeSharingAuthenticatesAndReturnsOnlinePublicPayload() throws Exception {
+        Fixtures fixtures = new Fixtures();
+        fixtures.sharing.nextState = new SharingState(true, "online", "{\"sharing\":true,\"statusCode\":\"online\"}");
+
+        JSONObject response = json(fixtures.controller().resumeSharing());
+
+        assertOk(response);
+        JSONObject data = response.getJSONObject("data");
+        assertTrue(data.getBoolean("sharing"));
+        assertEquals("online", data.getString("statusCode"));
+        assertFalse(fixtures.sharing.lastPaused);
+        assertEquals(Arrays.asList("auth", "setSharingPaused"), fixtures.calls);
+    }
+
+    @Test
+    public void getPrivacySettingsReturnsOnlyActiveStatusToggles() throws Exception {
+        Fixtures fixtures = new Fixtures();
+        fixtures.privacy.settings = privacySettings(Arrays.asList("music", "short_video"));
+
+        JSONObject response = json(fixtures.controller().getPrivacySettings());
+
+        assertOk(response);
+        JSONObject data = response.getJSONObject("data");
+        assertEquals(Arrays.asList("music", "short_video"), jsonArrayToList(data.getJSONArray("allowedStatuses")));
+        assertFalse(jsonArrayToList(data.getJSONArray("availableStatuses")).contains("paused"));
+        assertFalse(jsonArrayToList(data.getJSONArray("availableStatuses")).contains("offline"));
+        assertEquals(Arrays.asList("auth", "getPrivacySettings"), fixtures.calls);
+    }
+
+    @Test
+    public void updatePrivacySettingsFiltersPausedAndOfflineBeforeGateway() throws Exception {
+        Fixtures fixtures = new Fixtures();
+        fixtures.privacy.settings = privacySettings(Arrays.asList("music", "short_video"));
+
+        JSONObject response = json(fixtures.controller().updatePrivacySettings(
+                "{\"allowedStatuses\":[\"music\",\"paused\",\"offline\",\"short_video\",\"music\"]}"));
+
+        assertOk(response);
+        assertEquals(Arrays.asList("music", "short_video"), fixtures.privacy.lastAllowedStatuses);
+        assertFalse(response.toString().contains("offline"));
+        assertFalse(response.toString().contains("paused"));
+        assertEquals(Arrays.asList("auth", "updatePrivacySettings"), fixtures.calls);
+    }
+
+    @Test
+    public void sendHeartAuthenticatesAndReturnsPublicInteraction() throws Exception {
+        Fixtures fixtures = new Fixtures();
+        fixtures.interaction.heart = new HeartInteraction(
+                "heart-1",
+                "heart",
+                "2026-05-27T08:00:00Z",
+                false,
+                "{\"interactionId\":\"heart-1\",\"type\":\"heart\",\"createdAt\":\"2026-05-27T08:00:00Z\",\"seen\":false}");
+
+        JSONObject response = json(fixtures.controller().sendHeart());
+
+        assertOk(response);
+        JSONObject data = response.getJSONObject("data");
+        assertEquals("heart-1", data.getString("interactionId"));
+        assertEquals("heart", data.getString("type"));
+        assertFalse(response.toString().contains("token"));
+        assertEquals(Arrays.asList("auth", "sendHeart"), fixtures.calls);
+    }
+
+    @Test
+    public void sendHeartAcceptsWebPayload() throws Exception {
+        Fixtures fixtures = new Fixtures();
+
+        JSONObject response = json(fixtures.controller().sendHeart("{\"source\":\"bitbond_web_home\"}"));
+
+        assertOk(response);
+        assertEquals("heart-default", response.getJSONObject("data").getString("interactionId"));
+        assertEquals(Arrays.asList("auth", "sendHeart"), fixtures.calls);
+    }
+
+    @Test
+    public void getLatestInteractionsAuthenticatesAndReturnsPublicList() throws Exception {
+        Fixtures fixtures = new Fixtures();
+        fixtures.interaction.latest = new InteractionList(
+                Arrays.asList(new HeartInteraction(
+                        "heart-1",
+                        "heart",
+                        "2026-05-27T08:00:00Z",
+                        false,
+                        "{\"interactionId\":\"heart-1\",\"type\":\"heart\",\"createdAt\":\"2026-05-27T08:00:00Z\",\"seen\":false}")),
+                "{\"interactions\":[{\"interactionId\":\"heart-1\",\"type\":\"heart\",\"createdAt\":\"2026-05-27T08:00:00Z\",\"seen\":false}]}");
+
+        JSONObject response = json(fixtures.controller().getLatestInteractions());
+
+        assertOk(response);
+        assertEquals(1, response.getJSONObject("data").getJSONArray("interactions").length());
+        assertEquals(Arrays.asList("auth", "getLatestInteractions"), fixtures.calls);
+    }
+
+    @Test
+    public void markInteractionsSeenTrimsIdsAndDoesNotLeakPayloadSecrets() throws Exception {
+        Fixtures fixtures = new Fixtures();
+
+        JSONObject response = json(fixtures.controller().markInteractionsSeen(
+                "{\"interactionIds\":[\" heart-1 \",\"heart-2\"],\"token\":\"secret\"}"));
+
+        assertOk(response);
+        assertEquals(2, response.getJSONObject("data").getInt("markedCount"));
+        assertEquals(Arrays.asList("heart-1", "heart-2"), fixtures.interaction.lastMarkedIds);
+        assertFalse(response.toString().contains("secret"));
+        assertEquals(Arrays.asList("auth", "markInteractionsSeen"), fixtures.calls);
+    }
+
+    @Test
+    public void deleteAccountRequiresConfirmationBeforeAuthenticating() throws Exception {
+        Fixtures fixtures = new Fixtures();
+
+        JSONObject response = json(fixtures.controller().deleteAccount("{\"confirmed\":false,\"token\":\"secret\"}"));
+
+        assertError(response, "invalid_confirmation");
+        assertFalse(response.toString().contains("secret"));
+        assertEquals(new ArrayList<>(), fixtures.calls);
+        assertEquals(0, fixtures.account.deleteCallCount);
+    }
+
+    @Test
+    public void deleteAccountAuthenticatesAndDeletesWhenConfirmed() throws Exception {
+        Fixtures fixtures = new Fixtures();
+
+        JSONObject response = json(fixtures.controller().deleteAccount("{\"confirmed\":true}"));
+
+        assertOk(response);
+        assertTrue(response.getJSONObject("data").getBoolean("deleted"));
+        assertEquals(1, fixtures.account.deleteCallCount);
+        assertEquals(Arrays.asList("auth", "deleteAccount"), fixtures.calls);
+    }
+
+    @Test
+    public void recordAnalyticsEventDelegatesPropertiesWithoutEchoingPrivatePayload() throws Exception {
+        Fixtures fixtures = new Fixtures();
+
+        JSONObject response = json(fixtures.controller().recordAnalyticsEvent(
+                "{\"eventName\":\"heart_sent\",\"properties\":{\"surface\":\"widget\",\"token\":\"secret\",\"packageName\":\"com.tencent.mm\",\"statusCode\":\"music\",\"nested\":{\"button\":\"heart\",\"email\":\"person@example.test\"}}}"));
+
+        assertOk(response);
+        assertTrue(response.getJSONObject("data").getBoolean("recorded"));
+        assertEquals("heart_sent", fixtures.analytics.lastEventName);
+        assertEquals("widget", fixtures.analytics.lastProperties.getString("surface"));
+        assertEquals("heart", fixtures.analytics.lastProperties.getJSONObject("nested").getString("button"));
+        assertTrue(fixtures.analytics.lastProperties.has("token"));
+        assertFalse(response.toString().contains("secret"));
+        assertFalse(response.toString().contains("packageName"));
+        assertFalse(response.toString().contains("statusCode"));
+        assertEquals(Arrays.asList("auth", "recordAnalyticsEvent"), fixtures.calls);
+    }
+
+    @Test
+    public void recordAnalyticsEventPropagatesAnalyticsPropertyErrors() throws Exception {
+        Fixtures fixtures = new Fixtures();
+        fixtures.analytics.result = ApiResult.error(new ApiError(
+                "analytics_properties_too_deep",
+                "Analytics properties exceed the depth limit"));
+
+        JSONObject response = json(fixtures.controller().recordAnalyticsEvent(
+                "{\"eventName\":\"heart_sent\",\"properties\":{\"level1\":{\"level2\":{\"level3\":{\"value\":\"too-deep\"}}}}}"));
+
+        assertError(response, "analytics_properties_too_deep");
+        assertEquals(Arrays.asList("auth", "recordAnalyticsEvent"), fixtures.calls);
+    }
+
+    @Test
     public void gatewayFailureReturnsBridgeErrorInsteadOfThrowing() throws Exception {
         Fixtures fixtures = new Fixtures();
         fixtures.auth.result = ApiResult.error(new ApiError("auth_failed", "Auth failed"));
@@ -457,6 +668,21 @@ public class BitBondBridgeControllerTest {
                 "{\"paired\":true,\"partner\":{\"nickname\":\"小禾\",\"avatarId\":\"avatar_cat\"},\"statusCode\":\"music\",\"statusUpdatedAt\":\"2026-05-26T10:00:00Z\",\"expiresAt\":\"2026-05-26T10:15:00Z\",\"isPaused\":false}");
     }
 
+    private static PrivacySettings privacySettings(List<String> allowedStatuses) {
+        return new PrivacySettings(
+                allowedStatuses,
+                Arrays.asList("short_video", "watching_show", "reading", "music", "gaming", "social", "online", "resting"),
+                "{\"allowedStatuses\":[\"music\",\"short_video\"],\"availableStatuses\":[\"short_video\",\"watching_show\",\"reading\",\"music\",\"gaming\",\"social\",\"online\",\"resting\"]}");
+    }
+
+    private static List<String> jsonArrayToList(JSONArray array) throws Exception {
+        List<String> result = new ArrayList<>();
+        for (int i = 0; i < array.length(); i++) {
+            result.add(array.getString(i));
+        }
+        return result;
+    }
+
     private static JSONObject json(String rawJson) throws Exception {
         return new JSONObject(rawJson);
     }
@@ -476,6 +702,11 @@ public class BitBondBridgeControllerTest {
         private final FakePairingGateway pairing = new FakePairingGateway(calls);
         private final FakeAvatarGateway avatar = new FakeAvatarGateway(calls);
         private final FakeStatusGateway status = new FakeStatusGateway(calls);
+        private final FakeSharingGateway sharing = new FakeSharingGateway(calls);
+        private final FakePrivacyGateway privacy = new FakePrivacyGateway(calls);
+        private final FakeInteractionGateway interaction = new FakeInteractionGateway(calls);
+        private final FakeAccountGateway account = new FakeAccountGateway(calls);
+        private final FakeAnalyticsGateway analytics = new FakeAnalyticsGateway(calls);
         private final FakeStatusUploadTrigger uploadTrigger = new FakeStatusUploadTrigger(calls);
         private final FakeUsageAccessGateway usageAccess = new FakeUsageAccessGateway(calls);
         private final FakeAccessibilityAccessGateway accessibilityAccess = new FakeAccessibilityAccessGateway(calls);
@@ -488,6 +719,11 @@ public class BitBondBridgeControllerTest {
                     pairing,
                     avatar,
                     status,
+                    sharing,
+                    privacy,
+                    interaction,
+                    account,
+                    analytics,
                     uploadTrigger,
                     usageAccess,
                     accessibilityAccess,
@@ -592,6 +828,123 @@ public class BitBondBridgeControllerTest {
         public ApiResult<PartnerStatus> getPartnerStatus(AuthSession session) {
             calls.add("getPartnerStatus");
             return ApiResult.success(partnerStatus);
+        }
+    }
+
+    private static final class FakeSharingGateway implements SharingGateway {
+        private final List<String> calls;
+        private SharingState nextState = new SharingState(true, "online", "{\"sharing\":true,\"statusCode\":\"online\"}");
+        private boolean lastPaused;
+
+        private FakeSharingGateway(List<String> calls) {
+            this.calls = calls;
+        }
+
+        @Override
+        public ApiResult<SharingState> getSharingState(AuthSession session) {
+            calls.add("getSharingState");
+            return ApiResult.success(nextState);
+        }
+
+        @Override
+        public ApiResult<SharingState> setSharingPaused(AuthSession session, boolean paused) {
+            calls.add("setSharingPaused");
+            lastPaused = paused;
+            return ApiResult.success(nextState);
+        }
+    }
+
+    private static final class FakePrivacyGateway implements PrivacyGateway {
+        private final List<String> calls;
+        private PrivacySettings settings = privacySettings(Arrays.asList("music"));
+        private List<String> lastAllowedStatuses = new ArrayList<>();
+
+        private FakePrivacyGateway(List<String> calls) {
+            this.calls = calls;
+        }
+
+        @Override
+        public ApiResult<PrivacySettings> getSettings(AuthSession session) {
+            calls.add("getPrivacySettings");
+            return ApiResult.success(settings);
+        }
+
+        @Override
+        public ApiResult<PrivacySettings> updateSettings(AuthSession session, List<String> allowedStatuses) {
+            calls.add("updatePrivacySettings");
+            lastAllowedStatuses = new ArrayList<>(allowedStatuses);
+            return ApiResult.success(settings);
+        }
+    }
+
+    private static final class FakeInteractionGateway implements InteractionGateway {
+        private final List<String> calls;
+        private HeartInteraction heart = new HeartInteraction(
+                "heart-default",
+                "heart",
+                "2026-05-27T08:00:00Z",
+                false,
+                "{\"interactionId\":\"heart-default\",\"type\":\"heart\",\"createdAt\":\"2026-05-27T08:00:00Z\",\"seen\":false}");
+        private InteractionList latest = new InteractionList(new ArrayList<>(), "{\"interactions\":[]}");
+        private List<String> lastMarkedIds = new ArrayList<>();
+
+        private FakeInteractionGateway(List<String> calls) {
+            this.calls = calls;
+        }
+
+        @Override
+        public ApiResult<HeartInteraction> sendHeart(AuthSession session) {
+            calls.add("sendHeart");
+            return ApiResult.success(heart);
+        }
+
+        @Override
+        public ApiResult<InteractionList> getLatestInteractions(AuthSession session) {
+            calls.add("getLatestInteractions");
+            return ApiResult.success(latest);
+        }
+
+        @Override
+        public ApiResult<MarkSeenResult> markInteractionsSeen(AuthSession session, List<String> interactionIds) {
+            calls.add("markInteractionsSeen");
+            lastMarkedIds = new ArrayList<>(interactionIds);
+            return ApiResult.success(new MarkSeenResult(2, "{\"markedCount\":2}"));
+        }
+    }
+
+    private static final class FakeAccountGateway implements AccountGateway {
+        private final List<String> calls;
+        private int deleteCallCount;
+
+        private FakeAccountGateway(List<String> calls) {
+            this.calls = calls;
+        }
+
+        @Override
+        public ApiResult<DeleteAccountResult> deleteAccount(AuthSession session) {
+            calls.add("deleteAccount");
+            deleteCallCount++;
+            return ApiResult.success(new DeleteAccountResult(true, "{\"deleted\":true}"));
+        }
+    }
+
+    private static final class FakeAnalyticsGateway implements AnalyticsGateway {
+        private final List<String> calls;
+        private String lastEventName;
+        private JSONObject lastProperties = new JSONObject();
+        private ApiResult<AnalyticsEventResult> result =
+                ApiResult.success(new AnalyticsEventResult(true, "{\"recorded\":true}"));
+
+        private FakeAnalyticsGateway(List<String> calls) {
+            this.calls = calls;
+        }
+
+        @Override
+        public ApiResult<AnalyticsEventResult> recordEvent(AuthSession session, String eventName, JSONObject properties) {
+            calls.add("recordAnalyticsEvent");
+            lastEventName = eventName;
+            lastProperties = properties;
+            return result;
         }
     }
 

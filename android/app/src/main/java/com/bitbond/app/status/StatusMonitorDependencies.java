@@ -1,6 +1,7 @@
 package com.bitbond.app.status;
 
 import android.content.Context;
+import android.content.SharedPreferences;
 
 import com.bitbond.app.api.HttpSupabaseRpcClient;
 import com.bitbond.app.api.ApiError;
@@ -9,6 +10,7 @@ import com.bitbond.app.api.Transport;
 import com.bitbond.app.auth.AuthGateway;
 import com.bitbond.app.auth.AuthRepository;
 import com.bitbond.app.auth.SessionStore;
+import com.bitbond.app.background.BackgroundRefreshPolicy;
 import com.bitbond.app.config.SupabaseConfig;
 import com.bitbond.app.auth.AuthSession;
 import com.bitbond.app.MainActivity;
@@ -20,10 +22,15 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.time.DateTimeException;
+import java.time.Duration;
 import java.time.Instant;
 
 public final class StatusMonitorDependencies {
     private static final String AUTH_PREFS_NAME = "bitbond_auth";
+    private static final String BACKGROUND_REFRESH_PREFS_NAME = "bitbond_background_refresh";
+    private static final String KEY_LAST_REFRESH_AT_EPOCH_MILLIS = "last_refresh_at_epoch_millis";
+    private static final Duration BACKGROUND_REFRESH_MINIMUM_INTERVAL = Duration.ofHours(6);
 
     private StatusMonitorDependencies() {
     }
@@ -61,6 +68,9 @@ public final class StatusMonitorDependencies {
                 persistence));
         StatusRepository statusRepository = new StatusRepository(rpcClient);
         StatusMapper statusMapper = loadStatusMapper(serviceContext);
+        SharedPreferences backgroundRefreshPreferences = serviceContext.getSharedPreferences(
+                BACKGROUND_REFRESH_PREFS_NAME,
+                Context.MODE_PRIVATE);
 
         return new StatusMonitorRunner(
                 true,
@@ -69,7 +79,10 @@ public final class StatusMonitorDependencies {
                 ForegroundAppReader.fromContext(serviceContext),
                 statusMapper,
                 statusRepository,
-                Instant::now);
+                Instant::now,
+                new BackgroundRefreshPolicy(BACKGROUND_REFRESH_MINIMUM_INTERVAL),
+                () -> readLastRefreshAt(backgroundRefreshPreferences),
+                instant -> writeLastRefreshAt(backgroundRefreshPreferences, instant));
     }
 
     private static StatusMapper loadStatusMapper(Context context) {
@@ -90,6 +103,25 @@ public final class StatusMonitorDependencies {
             }
             return output.toString(StandardCharsets.UTF_8.name());
         }
+    }
+
+    private static Instant readLastRefreshAt(SharedPreferences preferences) {
+        long epochMillis = preferences.getLong(KEY_LAST_REFRESH_AT_EPOCH_MILLIS, Long.MIN_VALUE);
+        if (epochMillis == Long.MIN_VALUE) {
+            return null;
+        }
+
+        try {
+            return Instant.ofEpochMilli(epochMillis);
+        } catch (DateTimeException exception) {
+            return null;
+        }
+    }
+
+    private static void writeLastRefreshAt(SharedPreferences preferences, Instant lastRefreshAt) {
+        preferences.edit()
+                .putLong(KEY_LAST_REFRESH_AT_EPOCH_MILLIS, lastRefreshAt.toEpochMilli())
+                .apply();
     }
 
     private static final class NoOpStatusUploader implements StatusUploader {

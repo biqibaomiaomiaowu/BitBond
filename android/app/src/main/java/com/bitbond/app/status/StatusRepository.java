@@ -37,7 +37,7 @@ public final class StatusRepository implements StatusUploader, StatusGateway {
 
         String normalizedStatusCode;
         try {
-            normalizedStatusCode = validateStatusCode(statusCode);
+            normalizedStatusCode = validateUploadStatusCode(statusCode);
         } catch (IllegalArgumentException exception) {
             return ApiResult.error(new ApiError("invalid_status_code", "Status code is invalid"));
         }
@@ -142,6 +142,14 @@ public final class StatusRepository implements StatusUploader, StatusGateway {
             throw new IllegalArgumentException("Unsupported statusCode: " + normalized);
         }
 
+        return normalized;
+    }
+
+    private static String validateUploadStatusCode(String value) {
+        String normalized = validateStatusCode(value);
+        if ("offline".equals(normalized) || "paused".equals(normalized)) {
+            throw new IllegalArgumentException("Unsupported upload statusCode: " + normalized);
+        }
         return normalized;
     }
 

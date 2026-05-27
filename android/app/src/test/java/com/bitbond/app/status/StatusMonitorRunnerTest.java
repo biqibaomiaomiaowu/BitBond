@@ -6,12 +6,14 @@ import static org.junit.Assert.assertTrue;
 import com.bitbond.app.api.ApiResult;
 import com.bitbond.app.auth.AuthGateway;
 import com.bitbond.app.auth.AuthSession;
+import com.bitbond.app.background.BackgroundRefreshPolicy;
 import com.bitbond.app.status.StatusModels.CurrentStatusResult;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
 import org.junit.Test;
@@ -190,6 +192,60 @@ public class StatusMonitorRunnerTest {
         assertEquals(2, uploader.uploadCount);
     }
 
+    @Test
+    public void runOnceUsesBackgroundRefreshPolicyAndPersistsLastRefreshAt() {
+        List<String> calls = new ArrayList<>();
+        MutableClock clock = new MutableClock("2026-05-27T08:00:00Z");
+        AtomicReference<Instant> lastRefreshAt = new AtomicReference<>();
+        FakeUsageAccessGateway usageAccess = new FakeUsageAccessGateway(calls, true);
+        FakeAuthGateway auth = new FakeAuthGateway(calls);
+        FakeForegroundReader foregroundReader = new FakeForegroundReader(calls, "com.xingin.xhs");
+        FakeStatusUploader uploader = new FakeStatusUploader(calls);
+        StatusMonitorRunner runner = new StatusMonitorRunner(
+                true,
+                auth,
+                usageAccess,
+                foregroundReader,
+                statusMapper(),
+                uploader,
+                clock,
+                new BackgroundRefreshPolicy(Duration.ofHours(6)),
+                () -> {
+                    calls.add("readLastRefreshAt");
+                    return lastRefreshAt.get();
+                },
+                instant -> {
+                    calls.add("writeLastRefreshAt:" + instant);
+                    lastRefreshAt.set(instant);
+                });
+
+        runner.runOnce();
+        clock.set("2026-05-27T13:59:59Z");
+        runner.runOnce();
+        clock.set("2026-05-27T14:00:00Z");
+        runner.runOnce();
+
+        assertEquals(2, uploader.uploadCount);
+        assertEquals(Instant.parse("2026-05-27T14:00:00Z"), lastRefreshAt.get());
+        assertEquals(
+                List.of(
+                        "hasUsageAccess",
+                        "readLastRefreshAt",
+                        "readForeground",
+                        "auth",
+                        "upload:social",
+                        "writeLastRefreshAt:2026-05-27T08:00:00Z",
+                        "hasUsageAccess",
+                        "readLastRefreshAt",
+                        "hasUsageAccess",
+                        "readLastRefreshAt",
+                        "readForeground",
+                        "auth",
+                        "upload:social",
+                        "writeLastRefreshAt:2026-05-27T14:00:00Z"),
+                calls);
+    }
+
     private static AuthSession session() {
         return new AuthSession("access-token", "refresh-token", Long.MAX_VALUE);
     }
@@ -229,6 +285,15 @@ public class StatusMonitorRunnerTest {
                         """),
                 uploader,
                 clock);
+    }
+
+    private static StatusMapper statusMapper() {
+        return StatusMapper.fromJson("""
+                [
+                  {"package":"com.tencent.mm","statusCode":"social"},
+                  {"package":"com.xingin.xhs","statusCode":"social"}
+                ]
+                """);
     }
 
     private static final class FakeUsageAccessGateway implements UsageAccessGateway {
